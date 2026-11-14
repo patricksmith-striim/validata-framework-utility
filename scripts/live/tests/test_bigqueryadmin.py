@@ -277,8 +277,9 @@ def test_short_bigquery_stability_read_has_worker_startup_budget():
     admin.count_rows = count
     observe, _ = lifecycle._count_observer({'bigquery-target':{'admin':admin}},
                                           {'db':'bigquery-target','table':'slt.t'}, {})
-    record, held = lifecycle._hold(SimpleNamespace(stability_s=0.001), lifecycle.Clock, observe, lambda n:n==1)
-    assert held and record['value']==1 and budgets
+    record, reason = lifecycle._hold(SimpleNamespace(stability_s=0.001), lifecycle.Clock, observe, lambda n:n==1,
+                                     lambda remaining: None)
+    assert reason == 'satisfied' and record['held'] and record['value']==1 and budgets
 
 
 def test_job_delete_can_finish_within_the_original_budget(peer):
