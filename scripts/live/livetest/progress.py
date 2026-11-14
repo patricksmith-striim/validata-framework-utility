@@ -200,6 +200,7 @@ def at_fault(s, read, interrupt, *, record, cycle, baseline=0,
     Timed recovery (s=None) verifies RUNNING after its existing delay.
     """
     from datetime import datetime, timezone
+    from livetest.recovery import utc_at
     from livetest.resultschema import build_assertion_result
     observation = {"cycle": cycle, "value": None, "held": False,
                    "observedAt": None, "issuedAt": None, "interrupted": False,
@@ -211,6 +212,10 @@ def at_fault(s, read, interrupt, *, record, cycle, baseline=0,
             observedUtc=datetime.now(timezone.utc).isoformat())
         return value
     def save(ok, detail):
+        # UTC twins of the monotonic issuedAt and deadline (observedUtc is stamped per read): the
+        # monotonic clock orders readings inside one record and means nothing outside the run.
+        observation.update(issuedUtc=utc_at(observation["issuedAt"], now),
+                           deadlineUtc=utc_at(observation["deadline"], now))
         record(build_assertion_result(type="recovery", status="passed" if ok else "failed",
             spec={"trigger": s or {"kind": "timed", "status": "RUNNING"}},
             target=(s or {}).get("table", (s or {}).get("topic", (s or {}).get("slot", "application"))),

@@ -544,7 +544,9 @@ def test_restore_waits_rather_than_starting_a_self_healing_status():
     c = StubClient(statuses=["NOT_ENOUGH_SERVERS", "NOT_ENOUGH_SERVERS", "RUNNING"])
     recovery.restore(c, Ctx("docker"), "NS.App", "kill", timeout=5, poll=0.01,
                      expect_running=True) if False else None
-    c2 = StubClient(statuses=["NOT_ENOUGH_SERVERS"])
+    # The stub's await_running returns at once; the real one returns only on RUNNING, which the
+    # read after it (the settle's checked read) now has to show.
+    c2 = StubClient(statuses=["NOT_ENOUGH_SERVERS", "RUNNING"])
     recovery.restore(c2, Ctx("native"), "NS.App", "stop", timeout=5, poll=0.01)
     assert c2.started == [], "a self-healing status must not be STARTed"
 
@@ -689,3 +691,86 @@ def test_the_stop_start_cycle_action_verifies_its_stop():
                 src.index('action_spec["type"] == "drop_recreate_app"')]
     assert "client.stop_app(app)" not in block
     assert block.index("recovery.stop_cycle(") < block.index("client.start_app(app)")
+
+
+# --- expect_running: false verifies the app stayed stopped (it used to verify nothing) -------
+
+@pytest.mark.parametrize("status", ["RUNNING", "CRASH", "HALT", "TERMINATED", "NOT_ENOUGH_SERVERS"])
+def test_restore_expect_running_false_refuses_running_terminal_and_unsettled(status):
+    records = []
+    c = StubClient(statuses=[status])
+    with pytest.raises(RecoveryError, match=status):
+        recovery.restore(c, Ctx("native"), "NS.App", "stop", timeout=0.05, settle=0,
+                         expect_running=False, poll=0.01, record=records.append)
+    assert c.started == [] and c.awaited == []
+    assert [r["status"] for r in records] == ["failed"]
+    assert records[0]["type"] == "recovery"
+    assert records[0]["actual"]["rows"][0]["status"] == status
+
+
+def test_restore_expect_running_false_waits_out_a_transition_and_records_the_status():
+    records = []
+    c = StubClient(statuses=["STOPPING", "DEPLOYED"])
+    status = recovery.restore(c, Ctx("native"), "NS.App", "stop", timeout=30, settle=0,
+                              expect_running=False, poll=0, record=records.append)
+    assert status == "DEPLOYED" and c.started == []
+    assert [r["status"] for r in records] == ["passed"]
+    row = records[0]["actual"]["rows"][0]
+    assert row["status"] == "DEPLOYED" and row["expectRunning"] is False
+    from datetime import datetime
+    assert datetime.fromisoformat(row["observedUtc"]).tzinfo is not None
+
+
+# --- the settle checks its last read, not only the reads before each sleep --------------------
+
+def test_restore_checks_the_status_it_returns_when_settle_is_zero():
+    # STOPPED -> START -> RUNNING; the read restore() returns is HALT. It used to be returned
+    # unchecked, so a non-last cycle (settle 0) handed a HALTed app to the next interruption.
+    c = StubClient(statuses=["STOPPED", "RUNNING", "HALT"])
+    with pytest.raises(RecoveryError, match="HALT"):
+        recovery.restore(c, Ctx("native"), "NS.App", "stop", timeout=30, settle=0, poll=0)
+
+
+def test_watched_settle_checks_a_read_taken_at_the_deadline():
+    clock = {"t": 0.0}
+    reads = iter(["RUNNING", "RUNNING", "CRASH"])
+
+    def sleep(s):
+        clock["t"] += s
+    with pytest.raises(RecoveryError, match="CRASH"):
+        recovery.watched_settle(lambda: next(reads), 4.0, app="NS.App", poll=2.0,
+                                now=lambda: clock["t"], sleep=sleep)
+    assert clock["t"] == 4.0
+
+
+def test_watched_settle_accepts_completed_and_stops_waiting():
+    slept = []
+    assert recovery.watched_settle(lambda: "COMPLETED", 10.0, app="NS.App",
+                                   sleep=slept.append) == "COMPLETED"
+    assert slept == []
+
+
+# --- an action's own STOP/QUIESCE that crashes a RUNNING app is not an interruption ----------
+
+@pytest.mark.parametrize("mode,after", [("stop", "CRASH"), ("stop", "HALT"), ("quiesce", "CRASH"),
+                                        ("quiesce", "DEPLOYED")])
+def test_action_interrupt_of_a_running_app_requires_the_settled_status(mode, after):
+    c = StubClient(statuses=["STOPPING", after])
+    with pytest.raises(recovery.InterruptionNotSettled) as e:
+        recovery.await_action_interrupted(c, "NS.App", mode, "RUNNING", timeout=5, poll=0)
+    assert e.value.status == after
+
+
+@pytest.mark.parametrize("mode,after", [("stop", "DEPLOYED"), ("stop", "STOPPED"),
+                                        ("stop", "CREATED"), ("quiesce", "QUIESCED")])
+def test_action_interrupt_of_a_running_app_returns_the_settled_status(mode, after):
+    c = StubClient(statuses=["STOPPING", after])
+    assert recovery.await_action_interrupted(c, "NS.App", mode, "RUNNING", timeout=5, poll=0) == after
+
+
+@pytest.mark.parametrize("before", ["HALT", "CRASH", "QUIESCED", "DEPLOYED"])
+def test_action_interrupt_of_an_app_not_running_before_keeps_its_status(before):
+    # The STOP did not take the app out of RUNNING, so its status is not the STOP's doing: an
+    # in-place upgrade of a HALTed app, or a drop of a QUIESCED one, proceeds as before.
+    c = StubClient(statuses=[before])
+    assert recovery.await_action_interrupted(c, "NS.App", "stop", before, timeout=5, poll=0) == before

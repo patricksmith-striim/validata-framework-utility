@@ -620,7 +620,7 @@ in flight at the interruption are never replayed. `recover:` is how a test asks 
 | `after`, `every` | Timed delays; both refused with `trigger`; `every` needs `times > 1` |
 | `times` | 1; repeated cycles require `expect_running: true`. With a `trigger`, `times > 1` needs a `checkpoint` trigger without `above` (one that advances each cycle) |
 | `settle` | 20s after the last restore |
-| `expect_running` | `true`; a recovery marker requires it |
+| `expect_running` | `true`; a recovery marker requires it. `false` leaves the app stopped: it must settle `CREATED`, `DEPLOYED`, `STOPPED` or `QUIESCED`, and RUNNING or a terminal status fails the case; a `recovery` record holds the status |
 | `trigger` | Optional bounded progress reader, defined below |
 | `sentinel` | Optional `true`, with the declared lifecycle sentinel |
 | `node` | Optional exact container role or hosting-flow selector; unavailable with `quiesce` |
@@ -684,8 +684,10 @@ and `0` is legal — interrupt as soon as the data is in, the widest in-flight w
 
 **`settle`** is not politeness. Recovery replays asynchronously, so an assertion firing the
 instant the app reports RUNNING measures a half-replayed target and reports loss that is only
-lag. The status is re-read throughout, so an app that recovers into a HALT is reported as that
-rather than discovered later as "no data".
+lag. The status is re-read throughout and once more at the end, so an app that recovers into a
+HALT is reported as that rather than discovered later as "no data". The same watch covers the
+settle after `post_recover` seeds, transactions and the sentinel, and the `every` gap before
+cycles 2..N.
 
 **The app needs a `RECOVERY … INTERVAL` clause.** Without it there is no checkpoint to resume
 from and a restarted app simply re-reads from wherever it happens to be — the test would still
@@ -707,7 +709,7 @@ uses the primary API (default 9080); it does not require the secondary API port.
 | Key or combination | Meaning and requirements |
 |---|---|
 | `node: primary` | Select the primary role; refused when it hosts metadata, as in the bundled recipe |
-| `node: secondary`, `agent` | Select that exact framework container role; this alone makes no claim about flow ownership |
+| `node: secondary`, `agent` | Select that exact framework container role; this alone makes no claim about flow ownership. The fault's `recovery` record says whether the app was RUNNING on that node at the boundary: `appAffected` (null when `STATUS <server>` could not be read) and `appStatusOnNode` |
 | `node: {hosting: '${NS}.${TID}flow'}` | Requires one running Docker owner; deploy the flow `ON ONE IN ${TID}workers` with the owned secondary group below |
 | `mode: kill` with `node` | `docker kill -s KILL` only the selected container ID |
 | `mode: stop` with `node` | `docker stop` that container, rather than `STOP APPLICATION` |
@@ -966,8 +968,8 @@ checkpoint, slot and Kafka position triggers have hermetic coverage.
 Every cycle writes an assertion of type `recovery` in `evidence.json` and the
 results sidecar. Its `spec.trigger` holds the trigger declaration. The actual row contains `cycle`, `baseline`,
 `windowOpened` (the first in-window value and monotonic/UTC time), the final
-pre-command `value`, `held`, monotonic `observedAt`/`issuedAt`, UTC `observedUtc`,
-`deadline` and `interrupted`. Timed recovery uses `trigger.kind: timed` and checks
+pre-command `value`, `held`, monotonic `observedAt`/`issuedAt`/`deadline` with UTC
+`observedUtc`/`issuedUtc`/`deadlineUtc`, and `interrupted`. Timed recovery uses `trigger.kind: timed` and checks
 RUNNING at issuance. Progress recovery reads its precondition at the command boundary.
 
 A fresh progress read immediately before the command must still qualify.
@@ -1101,7 +1103,9 @@ action:
 ```
 
 - **Order:** STOP (best-effort: a HALTED app still drops); then, when `capture` or `stopped_seed` is
-  set, wait until the app has left RUNNING, run the captures and the `stopped_seed` files; UNDEPLOY,
+  set, wait until the app has left RUNNING (an app that was RUNNING before the STOP must be
+  `DEPLOYED`, `STOPPED` or `CREATED`; a CRASH or HALT fails the case), run the captures and the
+  `stopped_seed` files; UNDEPLOY,
   DROP FORCE, `recreate_wait`, re-create, DEPLOY, START, wait for RUNNING, `seed`.
 - **`tokens:`** names must be declared in the top-level `tokens:`, because the first deploy renders
   the same TQL. A value may contain `${...}` (a captured token, typically), rendered when the action
@@ -1146,7 +1150,10 @@ CREATE OR REPLACE SOURCE ChangeSource USING Global.MyCdcReaderV2 (
 
 - **`interrupt`:** `stop` (default) is `STOP APPLICATION`, which applies nothing pending; `quiesce` is
   `QUIESCE APPLICATION`, which flushes every component first and can land inside a source
-  transaction. Either way the action waits until the app has left RUNNING (QUIESCED for `quiesce`).
+  transaction. Either way the action waits until the app has left RUNNING. An app that was RUNNING
+  before the command must then be `DEPLOYED`, `STOPPED` or `CREATED` (`QUIESCED` for `quiesce`): a
+  CRASH or HALT fails the case before the captures run. An app already stopped or halted is upgraded
+  from that status.
 - **Order:** STOP (or QUIESCE) and wait until the app has left RUNNING; captures; `stopped_seed`; then one import:
   `USE ${NS}; UNDEPLOY APPLICATION <app>; ALTER APPLICATION <app>;` the rendered fragment,
   `ALTER APPLICATION <app> RECOMPILE;`, the TQL's own `DEPLOY APPLICATION <app> …;` (so deployment

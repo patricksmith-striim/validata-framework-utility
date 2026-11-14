@@ -318,6 +318,7 @@ a keyed `WHERE` count and do not materialize the whole table.
 | `fault-node-inventory-ambiguous` | The exact container inventory is unreadable, ambiguous or late. | Check Docker access, cluster identities and inventory evidence; do not target a guessed container. |
 | `fault-node-inventory-deadline` | The exact container inventory is unreadable, ambiguous or late. | Check Docker access, cluster identities and inventory evidence; do not target a guessed container. |
 | `fault-node-restore-status` | The app left RUNNING/COMPLETED during the restore settle. | Inspect app status and server logs; the container-state check is a separate node-fault check. |
+| `recover.expect_running is false, so the app must stay stopped` | After the restore the app was RUNNING again, in a terminal status, or still settling at the restore deadline; the `recovery` record holds the status. | Find what restarted or broke the app (platform auto-restart, server log); remove `expect_running: false` if the app is meant to come back. |
 | `fault-api-origin-unavailable` | The original API host cannot supply a surviving peer URL. | Use a resolvable Striim API URL and the published second-node REST mapping. |
 | `placement-mismatch` | The flow owner differs from the declared node/survivor. | Inspect running MON ownership and deployment placement; correct the deployment group. |
 | `placement-read-error` | Placement could not be read inside the assertion deadline. | Check MON/DESCRIBE API responses, surviving-node access and the nested error. |

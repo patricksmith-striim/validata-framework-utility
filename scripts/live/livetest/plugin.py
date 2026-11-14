@@ -199,8 +199,13 @@ def _cluster_provision_lock() -> Path:
 
 
 def _restore_then_post_recover(restore, run_files, seeds, settle, last,
-                                sleep=time.sleep, now=time.monotonic, hb=None, report=None, post_restore=None, after_restore=None):
-    """Restore one recovery cycle and seed after the last restore when configured."""
+                                sleep=time.sleep, now=time.monotonic, hb=None, report=None, post_restore=None, after_restore=None,
+                                status=None, app="the app"):
+    """Restore one recovery cycle and seed after the last restore when configured.
+
+    `status`, a reader of the app's current status, watches the settle that follows post-recover
+    inputs the way restore() watches its own (recovery.watched_settle): a crash during it fails
+    here. None (`expect_running: false`, where the app is meant to stay stopped) waits blind."""
     _post_rec = seeds if last else []
     restore(0.0 if (_post_rec or not last or post_restore or after_restore) else settle)
     if after_restore is not None:
@@ -223,10 +228,34 @@ def _restore_then_post_recover(restore, run_files, seeds, settle, last,
             sleep(max(0.0, min(2.0, _after - (now() - _pr0))))
         run_files([(_db, _f)])
     _hb_s = hb("recover: settling after the post-recover seed")
+    if status is not None:
+        recovery.watched_settle(status, settle, app=app, report=report, heartbeat=_hb_s,
+                                now=now, sleep=sleep)
+        return
     _st0 = now()
     while now() - _st0 < settle:
         _hb_s(now() - _st0, settle)
         sleep(max(0.0, min(2.0, settle - (now() - _st0))))
+
+
+def _wait_before_interrupt(wait, *, status=None, hb=None, sleep=time.sleep, now=time.monotonic,
+                           app="the app"):
+    """The pause before a recovery interruption. Cycles 2..N pass `status`: the app the previous
+    cycle restored is watched through the gap (recovery.watched_settle), so a crash in it fails
+    the case rather than going unseen when the platform restarts the app before the next
+    boundary read. The first cycle's `after` is a plain timed wait."""
+    hb = hb or (lambda _elapsed, _total: None)
+    if status is not None:
+        recovery.watched_settle(status, wait, app=app, heartbeat=hb,
+                                what="the wait before the next interruption", now=now, sleep=sleep)
+        return
+    t0 = now()
+    while True:
+        elapsed = now() - t0
+        if elapsed >= wait:
+            break
+        hb(elapsed, wait)
+        sleep(min(2.0, wait - elapsed))
 
 
 # Collection is driven by pytest's own testpaths + pytest_collect_file (LiveYamlFile) below,
@@ -3415,14 +3444,10 @@ class LiveItem(pytest.Item):
                             _last = (_i == _rc["times"] - 1)
                             _tag = "" if _rc["times"] == 1 else f" [{_i + 1}/{_rc['times']}]"
                             if _wait:
-                                _hb_r = _hb(f"waiting to {_rc['mode']} the app{_tag}")
-                                _rt0 = time.monotonic()
-                                while True:
-                                    _el = time.monotonic() - _rt0
-                                    if _el >= _wait:
-                                        break
-                                    _hb_r(_el, _wait)
-                                    time.sleep(min(2.0, _wait - _el))
+                                # Cycles 2..N watch the app the previous cycle restored.
+                                _wait_before_interrupt(
+                                    _wait, status=(lambda: client.current_status(_rc_app)) if _i else None,
+                                    hb=_hb(f"waiting to {_rc['mode']} the app{_tag}"), app=_rc_app)
                             _report(m.name, f"recover: interrupting {'app' if _rc_app == app else _rc_app} ({_rc['mode']}){_tag}")
                             # verify_timeout tracks the manifest's own timeout instead of
                             # recovery.interrupt's 120s default: on an 80 000-event pipeline a
@@ -3479,6 +3504,7 @@ class LiveItem(pytest.Item):
                                     client, ctx, _rc_app, _rc["mode"], timeout=m.timeout,
                                     settle=_settle,
                                     expect_running=_rc["expect_running"],
+                                    record=self._slt_records.append,
                                     report=lambda msg: _report(m.name, msg),
                                     progress=_hb(f"recover: waiting for app RUNNING{_tag}"),
                                     at_running=(lambda: _cp_witness.capture("restored"))
@@ -3501,6 +3527,8 @@ class LiveItem(pytest.Item):
                                 settle=_rc["settle"],
                                 last=_last,
                                 hb=_hb,
+                                status=(lambda: client.current_status(_rc_app)) if _rc["expect_running"] else None,
+                                app=_rc_app,
                                 report=lambda msg: _report(m.name, msg))
                         # The outage and the post_recover inputs are not lag: the diff's clock
                         # restarts when the last of them landed.
@@ -3681,6 +3709,10 @@ class LiveItem(pytest.Item):
                                             break
                                         _hb_d1(_elapsed, _dr_delay)
                                         time.sleep(min(2.0, _dr_delay - _elapsed))
+                                # Read before the STOP: a CRASH/HALT after it is refused only when
+                                # the STOP put it there (recovery.await_action_interrupted).
+                                _dr_before = (client.current_status(_dr_app)
+                                              if action_spec["capture"] or action_spec["stopped_seed"] else None)
                                 try:
                                     client.stop_app(_dr_app)
                                     _report(m.name, f"action: {_dr_app} stopped")
@@ -3690,7 +3722,8 @@ class LiveItem(pytest.Item):
                                 if action_spec["capture"] or action_spec["stopped_seed"]:
                                     # What is read or written "while stopped" must not race a
                                     # STOP that has been accepted and not yet taken effect.
-                                    recovery.await_left_running(client, _dr_app, timeout=min(300, m.timeout))
+                                    recovery.await_action_interrupted(
+                                        client, _dr_app, "stop", _dr_before, timeout=min(300, m.timeout))
                                     appactions.run_captures(
                                         client, action_spec["capture"], ns, tokens, m.timeout,
                                         report=lambda msg: _report(m.name, msg))
@@ -3770,12 +3803,16 @@ class LiveItem(pytest.Item):
                                 _report(m.name, f"action: alter_recompile ({_ar_app})")
                                 _wait_hb(action_spec["delay_before_stop"],
                                          f"action: waiting to stop {_ar_app}")
-                                if action_spec.get("interrupt", "stop") == "quiesce":
+                                _ar_mode = action_spec.get("interrupt", "stop")
+                                # A RUNNING app the STOP/QUIESCE leaves CRASH or HALT fails here,
+                                # before captures, stopped seeds and the ALTER run against it.
+                                _ar_before = client.current_status(_ar_app)
+                                if _ar_mode == "quiesce":
                                     client.quiesce_app(_ar_app)
                                 else:
                                     client.stop_app(_ar_app)
-                                _ar_status = recovery.await_left_running(
-                                    client, _ar_app, timeout=min(300, m.timeout))
+                                _ar_status = recovery.await_action_interrupted(
+                                    client, _ar_app, _ar_mode, _ar_before, timeout=min(300, m.timeout))
                                 _report(m.name, f"action: {_ar_app} {_ar_status.lower()}")
                                 appactions.run_captures(
                                     client, action_spec["capture"], ns, tokens, m.timeout,
