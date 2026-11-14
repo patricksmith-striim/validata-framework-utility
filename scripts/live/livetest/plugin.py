@@ -3418,7 +3418,7 @@ class LiveItem(pytest.Item):
                                 if _fault_target is not None:
                                     return _fault_target.interrupt(_rc["mode"])
                                 return recovery.interrupt(client, ctx, _rc_app, _rc["mode"],
-                                    verify_timeout=max(120.0, float(m.timeout) / 2.0),
+                                    verify_timeout=recovery.verify_timeout(m.timeout),
                                     report=lambda msg: _report(m.name, msg))
                             _progress_observed = _fault_progress.at_fault(
                                 _rc.get("trigger"), _read_at_fault, _issue_interrupt,
@@ -3594,7 +3594,15 @@ class LiveItem(pytest.Item):
                                                 time.sleep(min(2.0, delay - _elapsed))
 
                                         _report(m.name, f"action: stopping app{_tag}")
-                                        client.stop_app(app)
+                                        # Wait until the STOP has taken (DEPLOYED/STOPPED/CREATED)
+                                        # and record it: a rejected STOP, or one that crashed the
+                                        # app, fails the case here instead of passing as an
+                                        # undisturbed run. stop_duration counts from the settle.
+                                        _settled = recovery.stop_cycle(
+                                            client, app, cycle=cycle,
+                                            timeout=recovery.verify_timeout(m.timeout),
+                                            record=self._slt_records.append)
+                                        _report(m.name, f"action: app {_settled}{_tag}")
 
                                         if duration:
                                             _hb_sleep = _hb(f"action: app stopped, waiting to restart{_tag}")

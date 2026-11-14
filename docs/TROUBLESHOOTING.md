@@ -292,7 +292,7 @@ a keyed `WHERE` count and do not materialize the whole table.
 | Code | Meaning | What to change |
 |---|---|---|
 | `fault-missed` | The fault boundary was not proven, either before issuance or after interruption took effect. | Check `interrupted` and `afterInterrupt` before assuming the stack was undisturbed. Suffixes include deadline/window/read/app-status, no unique running Docker owner, and a flow moved before interruption. This is never absorbed by xfail. |
-| `fault-interrupt-error` | The interrupt command failed after its final observation. | Inspect the recorded command boundary and transport error; a failed request is not a completed fault. |
+| `fault-interrupt-error` | The interrupt command failed after its final observation. A STOP or QUIESCE that left the app still RUNNING ("not interrupted") or in another status than the mode leaves (CRASH, HALT, ...) is one; `settledStatus` names it. | Inspect the recorded command boundary and transport error; a failed request is not a completed fault. For a CRASH or HALT, read the server log: the command broke the app. |
 
 ## Prove the route transports a fresh marker after recovery
 

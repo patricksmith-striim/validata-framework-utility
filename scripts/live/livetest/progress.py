@@ -249,11 +249,16 @@ def at_fault(s, read, interrupt, *, record, cycle, baseline=0,
         save(False, f"fault-missed: {e}")
         raise ProgressError(f"fault-missed: {e}") from e
     observation["issuedAt"] = now()
+    from livetest.recovery import InterruptionNotSettled
     try:
-        interrupt()
+        settled = interrupt()
     except Exception as e:
+        if isinstance(e, InterruptionNotSettled):
+            observation["settledStatus"] = e.status
         save(False, f"fault-interrupt-error: {e}")
         raise
+    if isinstance(settled, str):        # what a STOP or QUIESCE left the app in
+        observation["settledStatus"] = settled
     observation["interrupted"] = True
     if s is not None:
         try:

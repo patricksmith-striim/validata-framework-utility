@@ -569,3 +569,94 @@ def test_restore_starts_the_app_from_every_restartable_status(left_in):
     recovery.restore(c, Ctx("native"), "NS.App", "stop", timeout=5, poll=0.01)
     assert c.started == ["NS.App"], f"{left_in} is restartable, so it must be STARTed"
 
+
+
+# --- a STOP or QUIESCE must settle on its own stopped status ------------------------------
+# CRASH and HALT are restartable because a SIGKILLed app returns as one of them. Under `stop` or
+# `quiesce` they mean the command broke the app instead of interrupting it, and a QUIESCE whose
+# flush crashed is no longer the drain arm of the stop/quiesce pair.
+
+@pytest.mark.parametrize("mode,settled", [
+    ("stop", "DEPLOYED"), ("stop", "STOPPED"), ("stop", "CREATED"), ("quiesce", "QUIESCED")])
+def test_interrupt_returns_the_status_it_settled_on(mode, settled):
+    c = StubClient(statuses=["RUNNING", "STOPPING", settled])
+    assert recovery.interrupt(c, Ctx("native"), "NS.App", mode, verify_timeout=5, poll=0) == settled
+
+
+@pytest.mark.parametrize("mode", ["stop", "quiesce"])
+@pytest.mark.parametrize("left_in", ["CRASH", "HALT", "TERMINATED"])
+def test_a_stop_or_quiesce_that_leaves_the_app_terminal_is_not_an_interruption(mode, left_in):
+    said = []
+    c = StubClient(statuses=["STOPPING", left_in])
+    with pytest.raises(RecoveryError, match=left_in) as e:
+        recovery.interrupt(c, Ctx("native"), "NS.App", mode, report=said.append, verify_timeout=5, poll=0)
+    assert e.value.status == left_in
+    assert c.started == [] and c.awaited == []                 # nothing restarted it
+    assert not any(f"app is {left_in}" in s for s in said)    # not reported as an interruption
+
+
+@pytest.mark.parametrize("mode,left_in", [("quiesce", "DEPLOYED"), ("quiesce", "STOPPED"),
+                                          ("stop", "QUIESCED"), ("stop", "COMPLETED")])
+def test_each_mode_accepts_only_its_own_stopped_statuses(mode, left_in):
+    c = StubClient(statuses=[left_in])
+    with pytest.raises(RecoveryError, match=left_in):
+        recovery.interrupt(c, Ctx("native"), "NS.App", mode, verify_timeout=5, poll=0)
+
+
+def test_still_running_after_the_verify_timeout_carries_the_status():
+    c = StubClient(statuses=["RUNNING"])
+    with pytest.raises(RecoveryError, match="not interrupted") as e:
+        recovery.interrupt(c, Ctx("native"), "NS.App", "stop", verify_timeout=0, poll=0)
+    assert e.value.status == "RUNNING"
+
+
+def test_the_fault_record_carries_the_settled_status():
+    from livetest import progress
+    recs = []
+    progress.at_fault(None, lambda left: "RUNNING", lambda: "DEPLOYED", record=recs.append, cycle=1)
+    assert recs[0]["status"] == "passed" and recs[0]["actual"]["rows"][0]["settledStatus"] == "DEPLOYED"
+
+    def crashed():
+        raise recovery.InterruptionNotSettled("NS.App is CRASH after STOP", "CRASH")
+    recs.clear()
+    with pytest.raises(RecoveryError):
+        progress.at_fault(None, lambda left: "RUNNING", crashed, record=recs.append, cycle=1)
+    assert recs[0]["status"] == "failed" and recs[0]["actual"]["rows"][0]["settledStatus"] == "CRASH"
+
+
+# --- stop_start_cycle: one STOP per cycle, verified and recorded ---------------------------
+
+def test_stop_cycle_waits_for_the_stop_and_records_the_settled_status():
+    recs = []
+    c = StubClient(statuses=["RUNNING", "STOPPING", "DEPLOYED"])
+    assert recovery.stop_cycle(c, "NS.App", cycle=3, timeout=5, record=recs.append, poll=0) == "DEPLOYED"
+    assert c.stopped == ["NS.App"] and c.started == []
+    [r] = recs
+    assert r["type"] == "recovery" and r["status"] == "passed"
+    assert r["spec"] == {"action": "stop_start_cycle", "cycle": 3}
+    assert r["actual"]["rows"][0]["status"] == "DEPLOYED"
+
+
+@pytest.mark.parametrize("left_in,match", [("RUNNING", "not interrupted"), ("CRASH", "CRASH")])
+def test_stop_cycle_fails_and_records_a_stop_that_did_not_stop_the_app(left_in, match):
+    recs = []
+    c = StubClient(statuses=[left_in])
+    with pytest.raises(RecoveryError, match=match):
+        recovery.stop_cycle(c, "NS.App", cycle=1, timeout=0, record=recs.append, poll=0)
+    [r] = recs
+    assert r["status"] == "failed" and r["actual"]["rows"][0]["status"] == left_in
+
+
+def test_verify_timeout_is_half_the_manifest_timeout_floored_at_two_minutes():
+    assert recovery.verify_timeout(60) == 120.0
+    assert recovery.verify_timeout(600) == 300.0
+
+
+def test_the_stop_start_cycle_action_verifies_its_stop():
+    # Inverted pin: the branch used to call stop_app and start_app with no status read between.
+    import livetest
+    src = (Path(livetest.__file__).parent / "plugin.py").read_text()
+    block = src[src.index('action_spec["type"] == "stop_start_cycle"'):
+                src.index('action_spec["type"] == "drop_recreate_app"')]
+    assert "client.stop_app(app)" not in block
+    assert block.index("recovery.stop_cycle(") < block.index("client.start_app(app)")

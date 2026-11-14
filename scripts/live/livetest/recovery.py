@@ -32,7 +32,16 @@ _RESTARTABLE = {"CREATED", "DEPLOYED", "STOPPED", "QUIESCED",
                 # A SIGKILLed app very plausibly comes back CRASH or HALT. Omitting these sent
                 # `kill` down the "wait for the platform" branch, where await_running raises
                 # "reached terminal status CRASH" instead of issuing the START that recovers it.
+                # Only `kill` reaches restore() in either: `interrupt` refuses a STOP or QUIESCE
+                # that did not settle on one of SETTLED's statuses.
                 "CRASH", "HALT"}
+
+# What a STOP or QUIESCE must leave the app in to count as a verified interruption. Anything
+# else -- CRASH or HALT above all -- means the command broke the app rather than interrupted it:
+# restarting it and letting the assertions pass on the replay would report a crash as a clean
+# stop, and a QUIESCE whose flush crashed is no longer the drain arm of the stop/quiesce pair.
+SETTLED = {"stop": frozenset({"DEPLOYED", "STOPPED", "CREATED"}),
+           "quiesce": frozenset({"QUIESCED"})}
 
 # Statuses the platform is still moving through. STOP and QUIESCE are ASYNCHRONOUS -- the API
 # returns when the command is accepted, not when it has taken effect -- so these are the states
@@ -76,6 +85,21 @@ class RecoveryError(Exception):
     pass
 
 
+class InterruptionNotSettled(RecoveryError):
+    """A STOP or QUIESCE that did not leave the app stopped; `status` is the last status read."""
+
+    def __init__(self, message: str, status: str):
+        super().__init__(message)
+        self.status = status
+
+
+def verify_timeout(manifest_timeout) -> float:
+    """How long a STOP or QUIESCE may take to settle: half the manifest's timeout, floored at
+    120s. On an 80 000-event pipeline a STOP can legitimately sit in STOPPING for minutes, and a
+    fixed budget would report a WORKING stop as "not interrupted"."""
+    return max(120.0, float(manifest_timeout) / 2.0)
+
+
 def _sh(argv, run=None):
     run = run or (lambda a: subprocess.run(a, capture_output=True, text=True))
     return run(argv)
@@ -116,10 +140,10 @@ def await_left_running(client, app: str, timeout: float, poll: float = 2.0,
     status = client.current_status(app)
     while status == "RUNNING" or status in _TRANSITIONAL:
         if time.monotonic() >= deadline:
-            raise RecoveryError(
+            raise InterruptionNotSettled(
                 f"{app} was still {status} {timeout:.0f}s after the interruption was issued -- "
                 f"treating it as not interrupted rather than proceeding, because an "
-                f"un-interrupted run would pass and prove nothing")
+                f"un-interrupted run would pass and prove nothing", status)
         if report:
             try:
                 report(f"recover: waiting for app to stop (now {status})")
@@ -128,6 +152,56 @@ def await_left_running(client, app: str, timeout: float, poll: float = 2.0,
         time.sleep(poll)
         status = client.current_status(app)
     return status
+
+
+def await_interrupted(client, app: str, mode: str, timeout: float, poll: float = 2.0,
+                      report=None) -> str:
+    """`await_left_running`, then require the status `mode` leaves behind (SETTLED); return it.
+
+    Raises InterruptionNotSettled for an app still RUNNING at the timeout, and for one that left
+    RUNNING into anything else, CRASH and HALT included.
+    """
+    status = await_left_running(client, app, timeout, poll=poll, report=report)
+    if status not in SETTLED[mode]:
+        raise InterruptionNotSettled(
+            f"{app} is {status} after {mode.upper()}, not {' or '.join(sorted(SETTLED[mode]))} -- "
+            f"the command did not interrupt the app, it left it {status}; not treating that as a "
+            f"verified interruption, and not restarting it", status)
+    return status
+
+
+def stop_cycle(client, app: str, *, cycle: int, timeout: float, record, poll: float = 0.5,
+               report=None) -> str:
+    """STOP `app` for one `stop_start_cycle` iteration and wait until it has stopped.
+
+    Returns the status it settled on, and writes one `recovery` record per call, passed or
+    failed, so the evidence shows every cycle's STOP. `stop_app` returns when the request is
+    sent, and `striim_api` does not raise on a rejected one: without this wait a STOP that never
+    happened left the app RUNNING, the START was a no-op, and the case passed as an undisturbed
+    run. Waiting here also keeps the START from being sent while the app is still STOPPING.
+    """
+    from livetest.resultschema import build_assertion_result
+    row = {"cycle": cycle, "status": None, "issuedAt": None, "settledAt": None}
+    ok, detail = False, "ok"
+    try:
+        row["issuedAt"] = time.monotonic()
+        client.stop_app(app)
+        row["status"] = await_interrupted(client, app, "stop", timeout, poll=poll, report=report)
+        row["settledAt"] = time.monotonic()
+        ok = True
+        return row["status"]
+    except InterruptionNotSettled as e:
+        row["status"], detail = e.status, str(e)
+        raise
+    except Exception as e:
+        detail = str(e)
+        raise
+    finally:
+        record(build_assertion_result(
+            type="recovery", status="passed" if ok else "failed",
+            spec={"action": "stop_start_cycle", "cycle": cycle}, target=app, db=None,
+            detail=detail, expected={"kind": "rows", "rows": [{"status": sorted(SETTLED["stop"])}]},
+            actual={"kind": "rows", "rows": [row]}))
 
 
 def _await_left_status(client, app: str, from_status: str, timeout: float,
@@ -149,7 +223,7 @@ def _await_left_status(client, app: str, from_status: str, timeout: float,
 
 
 def interrupt(client, ctx, app: str, mode: str, run=None, report=None,
-              verify_timeout: float = 120.0, poll: float = 2.0) -> None:
+              verify_timeout: float = 120.0, poll: float = 2.0) -> str | None:
     """Interrupt `app` by `mode`. Raises RecoveryError if the interruption itself failed.
 
     Not best-effort, unlike teardown: an interruption that quietly did not happen turns the
@@ -158,8 +232,9 @@ def interrupt(client, ctx, app: str, mode: str, run=None, report=None,
 
     For `stop`/`quiesce` the command is asynchronous, so this also WAITS for the app to leave
     RUNNING before returning -- the verification belongs here, at the point where the claim
-    "the app was interrupted" is made. `kill` cannot be verified this way: the node hosting the
-    status endpoint is the thing being killed.
+    "the app was interrupted" is made -- and requires the status the mode leaves behind
+    (SETTLED), which it returns. `kill` cannot be verified this way: the node hosting the
+    status endpoint is the thing being killed; it returns None.
     """
     def _say(msg):
         if report:
@@ -184,14 +259,16 @@ def interrupt(client, ctx, app: str, mode: str, run=None, report=None,
     if mode == "stop":
         _say("recover: STOP APPLICATION")
         client.stop_app(app)
-        _say(f"recover: app is {await_left_running(client, app, verify_timeout, poll=poll, report=report)}")
-        return
+        status = await_interrupted(client, app, mode, verify_timeout, poll=poll, report=report)
+        _say(f"recover: app is {status}")
+        return status
 
     if mode == "quiesce":
         _say("recover: QUIESCE APPLICATION")
         client.quiesce_app(app)
-        _say(f"recover: app is {await_left_running(client, app, verify_timeout, poll=poll, report=report)}")
-        return
+        status = await_interrupted(client, app, mode, verify_timeout, poll=poll, report=report)
+        _say(f"recover: app is {status}")
+        return status
 
     raise RecoveryError(f"unknown recover.mode {mode!r}")
 
