@@ -710,6 +710,68 @@ assert:
 - **`target:` is allowed, and is how a rollback is proved.** The database survives the failure:
   query the table and the checkpoint row to show the failing window landed nothing.
 
+### `assert.expect_log:` — what the operator logged
+
+The only assertion that can see a warning on a run that succeeds: `target:` reads the database and
+`expect_error:` needs the drive to fail.
+
+<!-- snippet: shape integration-tier test.yaml keys -->
+```yaml
+assert:
+  target:
+    - query: SELECT CUSTOMER_ID FROM ${POSTGRES_TARGET_SCHEMA}.${TID}customers ORDER BY CUSTOMER_ID
+      match: expected/customers.json
+  expect_log:                       # a substring, or a list of them
+    - 'useBulkCopyForBatchInsert is ignored'
+```
+
+- **Every entry must appear** in what the driver JVM printed (its stdout and stderr) on an
+  `assert.data` or `target:` drive. A miss fails the case and quotes the last 1500 characters of
+  that output.
+- **Refused at load:** an empty list, an entry that is not a non-blank string, and an entry too broad
+  to name a behaviour, since it matches almost any run (`warn`, `warning`, `error`, `info`, `log`,
+  `the`, in any case).
+- **It cannot be the only assertion.** It proves what the operator said, not what it did; pair it
+  with `target:` or `acked:` so the warning is asserted on a run that is also shown to work.
+- **Beside `expect_error:` it is ignored**, with a warning at load: the failure path does not read
+  the log.
+
+### `assert.monitor:` — what a target published to the monitor
+
+<!-- snippet: shape integration-tier test.yaml keys -->
+```yaml
+assert:
+  monitor:
+    PROCESSED: 5                    # compared as text with the published value
+    OPERATION_METRICS: '{"Delete":1,"Insert":3,"Update":1}'
+    ADAPTER_BASIC: {Tuning: {Windows: 2}}   # by subset: only the keys named are compared
+    COMMIT_LAG: ['${V_TABLE}']      # shape: a lag for exactly these tables
+```
+
+Needs a `target:` block: it reads the monitor figures in the writer's run report. A plain value is
+token-rendered and compared as text with the published one. `ADAPTER_BASIC` takes a mapping and
+compares only the keys it names, recursively, so the clocks beside its counts are left out.
+`COMMIT_LAG` takes the list of table names it must report a lag for; the lags themselves are clocks
+and are only required to be non-negative. Clocks (`LAST_COMMIT_TIME`, `LAST_IO_TIME`,
+`COMMIT_LATENCY`, `EXTERNAL_IO_LATENCY`, `LAST_WRITE_AGE`) and names the writer does not publish
+are refused at load, and the error lists the names that are accepted.
+
+### `assert.exception_store:` — the rows a target handed to the exception store
+
+<!-- snippet: shape integration-tier test.yaml keys -->
+```yaml
+assert:
+  target:
+    - query: SELECT CUSTOMER_ID FROM ${POSTGRES_TARGET_SCHEMA}.${TID}customers ORDER BY CUSTOMER_ID
+      match: expected/customers.json
+  exception_store: [[2, 3], [5]]    # two notifications: events 2 and 3, then event 5
+```
+
+Needs a `target:` block. Each inner list is one notification the writer made, naming its events by
+their 1-based position in `target.input` (a skipped row carries every event that folded into it),
+in the order the writer made them. The list must equal what the writer handed over exactly; `[]`
+asserts that nothing reached the store.
+
 ### `variants:` — one case, every database type
 
 The knob matrix cross-products *independent* flags. An **engine** is not independent: its URL,

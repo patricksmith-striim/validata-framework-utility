@@ -90,6 +90,20 @@ Shutdown") and the run fails. Cap each node, in your shell:
 export SLT_STRIIM_PRIMARY_CPUS=12 SLT_STRIIM_NODE_CPUS=12
 ```
 
+**Memory.** The Docker cluster runs three Striim JVMs, the two nodes and the agent, and
+`SLT_STRIIM_MEM_MAX` sets the heap of each: `16384m` by default, three 16 GB heaps. Their containers
+have no memory limit unless you set `SLT_STRIIM_MEM_LIMIT` (default `0`, no limit), so nothing stops
+the stack from taking all of the machine's memory, or all of Docker Desktop's (Settings,
+Resources). A heap is a ceiling, not what a JVM holds from the start. On a machine with less
+memory than that, lower both together and keep the limit about 1 GB above the heap:
+
+```
+export SLT_STRIIM_MEM_MAX=3072m SLT_STRIIM_MEM_LIMIT=4g
+```
+
+Before the cluster starts, `striim-test doctor` warns when three heaps are more than Docker's
+memory and `SLT_STRIIM_MEM_LIMIT` is unset.
+
 **Download and disk.** The first run downloads about 6.3 GB of Striim packages and drivers into
 `scripts/live/services/striim/images/striim/deps/`, then builds an image of about 22 GB. Docker
 needs at least **35 GB free** for that first build, and 5 GB to run afterwards. On Docker Desktop
@@ -216,9 +230,10 @@ Read the [sample prerequisite table](../README.md) before selecting the whole di
 whose prerequisite is missing is skipped (exit 3), so the run cannot exit 0: the BigQuery samples skip
 unless `SLT_BIGQUERY_IMAGE` names an emulator image you supply. To run only what your setup
 supports, pass each sample's directory.
-Sample 17 kills one shared app node and requires a two-node Docker cluster plus
-an agent and the survivor API port. Coordinate other stack users first;
-`disabled_parallel` excludes a concurrent case but provides no lock.
+Sample 17 kills one app node and requires a two-node Docker cluster plus an agent, and
+`SLT_ENABLE_NODE_FAULTS=1`, which you set only on a dedicated disposable stack; without it the
+case skips (exit 3). Coordinate other stack users first; `disabled_parallel` excludes a concurrent
+case but provides no lock.
 Spanner and file samples need their listed service or Docker access. The README lists what each sample shows. `samples/code/` holds two more that build
 and load Java ([TESTING-YOUR-JAVA.md](TESTING-YOUR-JAVA.md)).
 

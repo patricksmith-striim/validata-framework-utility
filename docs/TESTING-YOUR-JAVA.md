@@ -68,8 +68,22 @@ udf:
 Jar filenames normally end in the Striim series, such as `ReferenceOpV1-5.4.jar`. When
 configured releases share that series, both engines use the shortest unique version prefix:
 5.4.2 and 5.4.4.0 use `-5.4.2.jar` and `-5.4.4.jar`; 5.4.4.0 and 5.4.4.1 need all four parts.
-The existing `STRIIM_BUILD_<version>` build matrix and the selected `STRIIM_HOME` supply the
-release set automatically; other installs beside `STRIIM_HOME` do not count, so one matrix gives
+The release set is the selected `STRIIM_HOME`'s release plus the build matrix: one
+`STRIIM_BUILD_<version>` line per release you build for, in the shell or in the matrix file. The
+matrix file is `.env` in the project root unless `SLT_BUILD_MATRIX_ENV` names another file (a
+relative path is taken from the project root); `FTC_PUBLISHER_RELEASES_ENV`, its deprecated older
+name, is still read when `SLT_BUILD_MATRIX_ENV` is unset. Only `STRIIM_BUILD_` lines are read from
+it, so the matrix can share your `.env`:
+
+```
+STRIIM_BUILD_5_4_2=/opt/striim-5.4.2
+STRIIM_BUILD_5_4_4=/opt/striim-5.4.4.0
+```
+
+The key's version, with `_` for `.`, is a label: when the install path holds one
+`lib/Platform-<version>.jar`, that version is the one counted (5.4.4.0 here). A relative install
+path is taken from the matrix file's folder, and a line with no install path is ignored. A shell
+value wins over the file's. Other installs beside `STRIIM_HOME` do not count, so one matrix gives
 the same names on every machine. If the set cannot be determined, naming stays at the series.
 Builds on machines with multiple known releases keep separate Maven output directories, so
 building or cleaning one release preserves the others' jars, including across different series.
@@ -100,8 +114,9 @@ artifact … Platform-5.4.0.6.jar".
 ```bash
 export STRIIM_HOME=/path/to/striim
 ver=$(basename "$STRIIM_HOME"/lib/Platform-*.jar .jar); ver=${ver#Platform-}
+series=$(echo "$ver" | cut -d. -f1,2)
 cd samples/code/udf/java/UserDefinedFunctions/ReferenceUdf
-mvn package -DSTRIIM_VERSION=$ver -DSTRIIM_SERIES=${ver%.*} -DJAVA_RELEASE=17
+mvn package -DSTRIIM_VERSION=$ver -DSTRIIM_SERIES=$series -DJAVA_RELEASE=17
 ```
 
 An editor started from a desktop launcher does not inherit your shell's environment, so export

@@ -183,9 +183,11 @@ The suite runs serially by default: it shares one Striim cluster and one set of 
 containers. `striim-test run --parallel` (or `SLT_PARALLEL=1 python -m pytest -n N`) runs tests at
 once:
 
-- **Names.** `${TID}` and `${TID_ORACLE}` are empty in a serial run and a per-test prefix in a
-  parallel one: `"t"` plus 9 hex digits of a hash of the test name, with a trailing underscore
-  (`t1a2b3c4d_users`, `T1A2B3C4D_USERS`). Templates carry no separator of their own.
+- **Names.** `${TID}` and `${TID_ORACLE}` are never empty, serial runs included: `"t"` plus 9 hex
+  digits of a sha256 of the run id, the worker and the case name, with a trailing underscore
+  (`t1a2b3c4d_users`, `T1A2B3C4D_USERS`), so neither a parallel worker nor a second run shares a
+  name. Templates carry no separator of their own. Integration cases differ: their `${TID}` is
+  empty in a serial run ([TEST-YAML.md](../TEST-YAML.md), "Parallel-safety rules").
 - **Provisioning happens once.** The first worker to need the cluster or a service provisions it
   under a lock while the others wait, then reuse it.
 - **Open Processor and UDF jars load once** per cluster, across workers, checkouts and worktrees:

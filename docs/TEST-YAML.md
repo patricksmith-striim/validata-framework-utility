@@ -24,7 +24,7 @@ A test is a folder containing a `test.yaml` (this schema) plus whatever it refer
 | `ddl` | string \| list | no | none | schema setup, run once before seed/deploy. Plain string (or a bare list item) → the default `postgres-source` route. List form — entries in the same style `upload:`/`server_files:` use: `- file: <name>` plus an optional `db: <route>` (default `postgres-source`), applied in order. Routes are `<svc>-source`/`<svc>-target` (fixed `qasource`/`qatarget` schemas) plus the emulator routes (`spanner-*`, `gcs`, `kafka`) — see `SERVICES.md`. **Deprecated** (still parses, warns naming the file): the route-keyed entry `{source_db\|target_db: <route>, file: <name>}` — the route value already carries the direction; write `db:` |
 | `seed` | string \| list | no | none | data setup, same shape/back-compat as `ddl`, plus two per-entry keys `ddl` does not take: **`when`** (`pre_deploy` (default) \| `post_start` \| `post_recover`) and **`after`** — see below |
 | `setup` | mapping | no | none | tables the case creates before its DDL and deploy: `bigtable:` (a list of `{table, families, gc, seed, db}`), dropped at teardown unless kept — see the `setup` section |
-| `action` | list | no | `[]` | app lifecycle operations run in order after every `post_start` seed and before every assertion tier. Five types: **`stop_start_cycle`** (`cycles`, `delay_before_stop`, `stop_duration`; each STOP must leave the app DEPLOYED, STOPPED or CREATED within half the case `timeout` (at least 120 s) or the case fails, `stop_duration` counts from then, and each cycle writes a `recovery` record of the status it settled on; optional `concurrent:` SQL loops on background threads, each `{db, file, loop_interval}`: `db` must be a route of a `requires:` service, and the case fails if a loop never succeeds or any of its statements errors); **`drop_recreate_app`** (`app` — token-rendered so a multi-app manifest names just the piece it rebuilds; `delay_before_stop`, `recreate_wait`, `seed`, and `capture`/`stopped_seed`/`tokens`, see [below](#action-drop_recreate_app--rebuild-the-app-from-its-tql)) which STOPs, `DROP APPLICATION … FORCE`s via `StriimClient._force_drop`, then rebuilds the app from its own `CREATE OR REPLACE APPLICATION … END` block in the rendered TQL and waits for RUNNING; **`service_outage`** (see [below](#action-service_outage--take-a-required-service-down-mid-run)) which stops a required service's container mid-run and starts it again; **`capture`** ([below](#action-capture--read-a-value-into-a-token)), which reads a `DESCRIBE` or `MON` field into a token; and **`alter_recompile`** ([below](#action-alter_recompile--replace-components-in-place)), the in-place `ALTER APPLICATION … RECOMPILE` upgrade. Gallery: `framework-action`, `framework-drop-recreate` |
+| `action` | list | no | `[]` | app lifecycle operations run in order after every `post_start` seed and before every assertion tier. Five types: **`stop_start_cycle`** (`cycles`, default 1; `delay_before_stop`, default 3 s; `stop_duration`, default 2 s; each STOP must leave the app DEPLOYED, STOPPED or CREATED within half the case `timeout` (at least 120 s) or the case fails, `stop_duration` counts from then, and each cycle writes a `recovery` record of the status it settled on; optional `concurrent:` SQL loops on background threads, each `{db, file, loop_interval}` with `loop_interval` (default 1 s) the pause between iterations: `db` must be a route of a `requires:` service, and the case fails if a loop never succeeds or any of its statements errors); **`drop_recreate_app`** (`app` — token-rendered so a multi-app manifest names just the piece it rebuilds; `delay_before_stop`, `recreate_wait`, `seed`, and `capture`/`stopped_seed`/`tokens`, see [below](#action-drop_recreate_app--rebuild-the-app-from-its-tql)) which STOPs, `DROP APPLICATION … FORCE`s via `StriimClient._force_drop`, then rebuilds the app from its own `CREATE OR REPLACE APPLICATION … END` block in the rendered TQL and waits for RUNNING; **`service_outage`** (see [below](#action-service_outage--take-a-required-service-down-mid-run)) which stops a required service's container mid-run and starts it again; **`capture`** ([below](#action-capture--read-a-value-into-a-token)), which reads a `DESCRIBE` or `MON` field into a token; and **`alter_recompile`** ([below](#action-alter_recompile--replace-components-in-place)), the in-place `ALTER APPLICATION … RECOMPILE` upgrade. Gallery: `framework-action`, `framework-drop-recreate` |
 | `assert` | mapping | **yes** | — | at least one tier (`smoke`, `data`, `diff`, `file`, `gcs`, `json`, `bigtable`, `monitor`, `checkpoint_history`, `jmx`, `placement`) — see below |
 | `example` | string | no | none | app directory, relative to the project root (`SLT_PROJECT_ROOT`, this clone when unset), with or without an OP/UDF. When set, `tql`/`ddl`/`seed`/`upload` are read from THERE; only `expected/*.csv` and entries marked [`local: true`](#local-true--test-only-files-beside-an-example) stay test-local. Absent → everything is relative to the test dir (self-contained regression style) |
 | `op` | mapping \| list | no | none | build + upload OpenProcessor jar(s), registered via `LOAD OPEN PROCESSOR` — single mapping or a list, see below |
@@ -1866,6 +1866,7 @@ Rules (enforced by `manifest._normalize_modules`):
 - `jar` (str, required per entry) — a MODULE reference relative to the project root (`SLT_PROJECT_ROOT`, this clone when unset): its dir, or `pom.xml`, and never a versioned jar path. The framework builds the module in place, writing `<module>/target/`, and may run `mvn clean` there. Must be a real member of the key's family (`op:` → under `java/OpenProcessors/`, `udf:` → under `java/UserDefinedFunctions/`) — a mismatch is rejected loudly at load, not silently mis-driven.
 - `token` (str, optional) — defaults to `OP` (for an `op:` entry) or `UDF` (for a `udf:` entry); must match `^[A-Z][A-Z0-9_]*$` when given, and be **unique across the merged `op:`+`udf:` list** (two token-less entries of the same kind collide and raise, naming both). Produces `${<TOKEN>_JAR}` / `${<TOKEN>_NAME}`.
 - `upload` (list, optional, per entry) — resolved relative to `source_dir` (the `example:` dir if set, else the test dir); a `{from, to}` entry with `local: true` is read from the test dir.
+- `on_agent` (bool, optional, default `false`; `op:` entries only, refused on a `udf:` entry) — also puts the built jar on the agent's classpath and restarts the agent, for a flow deployed to the agent. `LOAD OPEN PROCESSOR` reaches the servers only, so without it such a flow fails at `DEPLOY` with `ClassNotFoundException`. The jar is copied only when it differs from the one already on the agent, so a run restarts the agent once per changed jar, then waits for it to register again. The agent is shared: a concurrent sibling using it sees the restart, so give such a case `disabled_parallel`. Docker mode only; against your own Striim the step is skipped with a note.
 - No other keys are accepted — an unknown key (including a leftover `load:`) raises at load time.
 
 ## `server_files:` — placing files on the Striim server
@@ -2021,7 +2022,10 @@ assert:
       # (a spec-wide `db:` is still accepted as a fallback for both endpoints)
 ```
 An empty source fails fast (asserts nothing). Polls until the target's distinct row set equals
-the source's. On a SQL database target each poll counts the target first and reads it in full only
+the source's. `fold_names: true` (optional, default `false`) lower-cases every column name on both
+sides before comparing, for a diff across engines that fold unquoted names differently: a
+PostgreSQL source's `id` never equals an Oracle target's `ID` otherwise. It is off by default
+because a same-engine case may pin a column's case. On a SQL database target each poll counts the target first and reads it in full only
 when the count can match (`exact: true`: the source's row count; otherwise at least its distinct
 rows); with `exact: true` the source is also only counted until then. The time it reports
 (`elapsed_s`) runs from the app's start, or from the last input after it (a `post_start` seed,
@@ -2508,11 +2512,16 @@ refs) is `${TOKEN}`-substituted before use. Tokens come from these places:
 
 The suite runs **serially by default** (one shared cluster + service containers);
 `SLT_PARALLEL=1` opts in to concurrent runs (`striim-test run --parallel`, or `pytest-xdist -n N`).
-For an *author* the flag changes only token values: a serial run renders
-`${TID}`/`${TID_UPPER}`/`${TID_ORACLE}` as `""`; a concurrent run renders a short per-test id
-with the trailing `_` separator baked in — `${TID}users` → `users` serially, `t1a2b3c4d_users`
-in parallel. All three are the same hashed id (`"t"` + 9 hex of a sha256 of the test name),
-differing only in case — none of them is a readable test-name slug. Write every test so both renderings work:
+What `${TID}` renders to depends on the tier:
+
+- **Live cases:** `${TID}`/`${TID_UPPER}`/`${TID_ORACLE}` are never empty, serial runs included:
+  `"t"` + 9 hex of a sha256 of the run id, the xdist worker and the case name, with the trailing
+  `_` separator baked in (`${TID}users` → `t1a2b3c4d_users`). The three differ only in case, and
+  two runs of one case get different values.
+- **Integration cases:** `${TID}`/`${TID_ORACLE}` are empty in a serial integration run
+  (`${TID}users` → `users`) and a fresh random id of the same shape in a parallel one.
+
+None of them is a readable test-name slug. Write every test so it works with either rendering:
 
 - **Every DB object name carries `${TID}`** — tables in ddl/seed/TQL and `assert` targets are
   `${TID}<name>`, and `${TID_ORACLE}<NAME>` for Oracle (unquoted identifiers uppercase; also for

@@ -79,16 +79,21 @@ licence ([SERVICES.md](SERVICES.md), "Teradata"). Point it at your instance the 
 `.env` or the shell:
 
 ```
-SLT_TERADATA_HOST=td.example.com
-SLT_TERADATA_PORT=1025            # default 1025
-SLT_TERADATA_USER=dbc             # the admin; default dbc
-SLT_TERADATA_PASSWORD=...
-SLT_TERADATA_SOURCE_USER=qasource   # default qasource; SOURCE_PASSWORD, SOURCE_SCHEMA likewise
-SLT_TERADATA_TARGET_USER=qatarget   # default qatarget; TARGET_PASSWORD, TARGET_SCHEMA likewise
+SLT_TERADATA_HOST=td.example.com      # required; unset, Teradata tests skip
+SLT_TERADATA_PORT=1025                # default 1025
+SLT_TERADATA_USER=dbc                 # required: the admin
+SLT_TERADATA_PASSWORD=...             # required
+SLT_TERADATA_SOURCE_USER=qasource     # required
+SLT_TERADATA_SOURCE_PASSWORD=...      # required
+SLT_TERADATA_SOURCE_SCHEMA=qasource   # default qasource
+SLT_TERADATA_TARGET_USER=qatarget     # required
+SLT_TERADATA_TARGET_PASSWORD=...      # required
+SLT_TERADATA_TARGET_SCHEMA=qatarget   # default qatarget
 ```
 
-- The admin user creates the source and target users when they cannot log in. In Teradata a user
-  is also a database, so each schema defaults to its user's name.
+- The six user and password settings have no default; a run that needs Teradata stops and names
+  any that are unset. The admin user creates the source and target users when they cannot log in.
+  In Teradata a user is also a database, so set each schema to its user's name.
 - `SLT_TERADATA_VIEW_HOST` sets the host Striim reaches it by, when that differs.
 - The integration tier reads the same settings with the `INT_TERADATA_` prefix (`INT_TERADATA_HOST`,
   `INT_TERADATA_ADMIN_USER` and so on).

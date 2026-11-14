@@ -12,6 +12,7 @@ Highest first: your shell's environment, then `.env` in your project root (in a 
 - **shell**: only from the environment. In `.env` it is not read.
 - **`.env`**: from the environment or `.env`.
 - **machine**: from the machine file too. Paths, ports, the stack prefix and `STRIIM_URL` are never read from it, so two checkouts on one machine stay apart; license keys are read from the shell or the machine file only, never `.env`.
+- **matrix file**: `STRIIM_BUILD_<version>` only, from the environment or the build matrix file: `.env` in your project root, or the file `SLT_BUILD_MATRIX_ENV` names. Only `STRIIM_BUILD_` lines are read from it, so the matrix can share your `.env`.
 
 Start from your repository's `.env.example`. `striim-test doctor` lists the settings that are set and where each came from.
 
@@ -79,6 +80,9 @@ Start from your repository's `.env.example`. `striim-test doctor` lists the sett
 | `SLT_PREBUILT_JAR_<MODULE>` | shell | unset: build the module | A jar to test in place of building that module, for example `SLT_PREBUILT_JAR_REFERENCEOP` for `ReferenceOp`; a folder is searched for the module's jar. Wins over the next two ([TESTING-YOUR-JAVA.md](TESTING-YOUR-JAVA.md)). |
 | `SLT_PREBUILT_JAR` | shell | unset | A jar, or a folder, for every module the run builds. |
 | `SLT_PREBUILT_DIR` | shell | unset | A folder holding one jar per module and series. |
+| `STRIIM_BUILD_<version>` | shell, matrix file | unset | The build matrix: one line per Striim release you build for, the version with `_` for `.` and an install path as the value, for example `STRIIM_BUILD_5_4_2=/opt/striim-5.4.2`. A relative path is taken from the matrix file's folder. The releases it names, with `STRIIM_HOME`'s, decide the version suffix of every jar's file name ([TESTING-YOUR-JAVA.md](TESTING-YOUR-JAVA.md)). |
+| `SLT_BUILD_MATRIX_ENV` | shell | `.env` in the project root | The file the build matrix is read from; a relative path is taken from the project root. |
+| `FTC_PUBLISHER_RELEASES_ENV` | shell | unset | Deprecated older name for `SLT_BUILD_MATRIX_ENV`, read only when that is unset; it will be removed in a later release. |
 
 ## The Docker Striim cluster
 
