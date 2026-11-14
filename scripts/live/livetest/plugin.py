@@ -340,6 +340,12 @@ def _activate_project() -> None:
 
 
 def pytest_configure(config):
+    # Every depth_* marker a LiveItem can carry (a manifest without depth: is depth_regression), so a
+    # project run with --strict-markers collects without registering them itself. (A hermetic
+    # caller's stand-in config has no marker table; a real pytest Config always does.)
+    register = getattr(config, "addinivalue_line", None)
+    for depth in sorted(VALID_DEPTHS) if callable(register) else ():
+        register("markers", f"depth_{depth}: live case whose manifest depth is {depth}")
     _activate_project()
     _collect_every_case_root(config)
     from livetest import paths
@@ -2267,7 +2273,7 @@ def pytest_collect_file(parent, file_path):
     return LiveYamlFile.from_parent(parent, path=file_path)
 
 def _collection_manifest(path):
-    """Read once for collection markers; LiveYamlFile.collect has already loaded the manifest, so an invalid one is a collection error."""
+    """A raw read for the _declared_* helpers (callers that must not fail on a bad manifest); collection itself loads the manifest."""
     try:
         raw = yaml.safe_load(path.read_text())
     except (OSError, yaml.YAMLError):
@@ -2303,15 +2309,15 @@ class LiveYamlFile(pytest.File):
         # A manifest the loader refuses is a collection error, reported whatever -m selects: before,
         # a misspelt depth got no depth_* marker, the tier filter deselected the case, and the
         # loader that would have named the typo never ran.
+        # The markers come from that one load, so the manifest is parsed once.
         try:
-            load_manifest(self.path)
+            m = load_manifest(self.path)
         except ManifestError as e:
             raise self.CollectError(str(e)) from None
-        raw = _collection_manifest(self.path)
         yield LiveItem.from_parent(self, name=self.path.parent.name, manifest_path=self.path,
-                                   services=_declared_services(self.path, raw),
-                                   depth=_declared_depth(self.path, raw),
-                                   tags=_declared_tags(self.path, raw))
+                                   services=[s for s in m.requires if isinstance(s, str)],
+                                   depth=m.depth,
+                                   tags=[t for t in m.tags if isinstance(t, str)])
 
 def _prepare_service(defn, env, mode):
     why = _prestart.prepare_selected(defn, env, mode)

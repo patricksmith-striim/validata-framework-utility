@@ -172,3 +172,22 @@ def test_any_manifest_error_is_a_collection_error_even_when_its_tier_is_filtered
     rc, out = _collect_case(tmp_path, "depth: smoke\ntimout: 30\n", "depth_gate")
     assert rc not in (0, 5), out[-800:]
     assert "unknown manifest key(s) ['timout']" in out, out[-800:]
+
+
+def test_every_depth_marker_is_registered_by_the_plugin_for_strict_markers(tmp_path):
+    # A project's own configuration need not list the depth markers: under --strict-markers an
+    # unregistered depth_regression (every manifest without depth:) was a collection error.
+    for name, extra in (("nodepth", ""), ("smokecase", "depth: smoke\n"), ("canarycase", "depth: canary\n")):
+        case = tmp_path / "cases" / name
+        case.mkdir(parents=True)
+        (case / "test.yaml").write_text(_CASE.format(name=name, extra=extra))
+        (case / "app.tql").write_text("CREATE APPLICATION ${APP};\nEND APPLICATION ${APP};\n")
+    (tmp_path / "pytest.ini").write_text("[pytest]\nmarkers =\n    live: live case\n")
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("SLT_", "INT_", "PYTEST_", "COVERAGE_", "STRIIM"))}
+    env.update(SLT_LOCK_DIR=str(tmp_path / "locks"), SLT_CASE_RECORDS="off", SLT_PRE_UP="0")
+    r = subprocess.run([sys.executable, "-m", "pytest", "-p", "livetest.plugin", "-p", "no:cacheprovider",
+                        "--import-mode=importlib", "--collect-only", "-q", "--strict-markers",
+                        "-W", "error::pytest.PytestUnknownMarkWarning", str(tmp_path / "cases")],
+                       cwd=tmp_path, env=env, capture_output=True, text=True, timeout=300)
+    out = r.stdout + r.stderr
+    assert r.returncode == 0 and "3 tests collected" in out, out[-800:]
