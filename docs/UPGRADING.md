@@ -2,6 +2,115 @@
 
 Review the changes below before reusing services started by an older framework.
 
+## Unreleased
+
+What `main` has changed since v0.3.2. Each heading is something to check before moving your pin
+past it. [RELEASE-NOTES.md](../RELEASE-NOTES.md) lists every change.
+
+### Unknown keys in assertion specs (breaking)
+
+A misspelt or unknown key inside an `assert:` spec (`data`, `diff`, `file`, `gcs`, `json`) or in
+a `ddl`, `seed`, `server_files`, `generate`, `concurrent` or `stop_start_cycle` entry is now
+refused when the manifest loads. Run `striim-test doctor --case <dir>` on your cases before you
+move the pin. Each refusal names the file and the key. Correct the spelling (`exact`, not
+`exat`); do not delete the key, since it was meant to apply.
+
+### `expect_halt_contains` in Docker mode (breaking)
+
+When a halt happens while the app runs and the cluster's server log cannot be read, the case now
+fails instead of passing unchecked. If such a case starts failing with "the node log could not be
+read", fix the stack (the app nodes' containers must answer `docker exec`), not the case.
+
+### One rebuild of every operator jar
+
+The live tier now keeps a `<jar>.sources` record as the integration tier does. The first live run
+after the upgrade rebuilds each OP and UDF jar once, so allow for the Maven time. After that, a
+jar is rebuilt when its source, pom, parent pom, an added source root (`FieldCommon`) or a deleted
+file changes, in both engines.
+
+### Integration item ids (breaking)
+
+A case with variants now runs as one item per variant group, `case[variant]`. Update anything
+that selects or reports integration items by id. `INT_VARIANT_ITEMS=0` restores the old ids.
+
+### Integration runs that skip everything (breaking)
+
+An integration run in which every case skipped because the host could not run it exits 1, not 0.
+Install what the skip reason names, or set `INT_ALLOW_ALL_SKIPPED=1` if a run of nothing is what
+you meant.
+
+### Case records in `.local-evidence/`
+
+Runs write per-case records to `<project>/.local-evidence/case-records`. Add `.local-evidence/`
+to your repo's `.gitignore`, or set `SLT_CASE_RECORDS` to another directory or to `off`.
+
+### Diff times
+
+`assert.diff` times now run from the app's start, not the first poll, and a target counted short
+is not read in full. Times on large tables are smaller. Do not compare `elapsed_s` across this
+upgrade.
+
+## v0.3.2
+
+### Whole-number decimals in integration goldens (breaking)
+
+A whole-number `BigDecimal` is written as a decimal: Oracle `NUMBER(10,2)` 12500.00 is now
+`12500.0`, not `12500`. An integration golden that recorded such a value as an integer
+(`5001`) needs `5001.0`.
+
+## v0.3.0
+
+### Unknown `assert:` tiers (breaking)
+
+An unknown tier name (`rowcount:`, say) is refused at load in both engines. It used to be
+ignored, and the case passed without it. For a row count use `data:` with `rows:`.
+
+### Exit codes and failed builds (breaking)
+
+A run with a failure and a skip exits 1, not 3. A failed OP or UDF build fails the case instead
+of skipping it. A prebuilt jar without the expected suffix fails. Update scripts that read the
+exit code.
+
+### Integration comparisons are type-strict (breaking)
+
+The integration mock platform matches Striim 5.4.0.6C. An OP that relied on growing `WAEvent`
+arrays fails here as it does in production. Integration `assert.data`, perf correctness and
+`assert.json` no longer treat `true` as `1` or `5.0` as `5`. Correct goldens that relied on that.
+`expect_error` matches only the exception chain the operator threw.
+
+### Assertions that passed on missing data (breaking)
+
+These now fail:
+
+- a missing Kafka topic;
+- an exact `assert.file` with no output file;
+- an empty `assert.monitor` response;
+- golden rows with more cells than the header;
+- a `checkpoint_history: empty` that does not hold for the whole `timeout`.
+
+SQL Server and Teradata `min_rows`, and every `rows:`, wait for committed rows.
+
+### OP-loader poison and app-node restarts (breaking)
+
+A shared or undeclared run no longer restarts the app nodes. It fails the case with
+`[slt-op-poisoned]` and names `python -m livetest.preflight --restart-app-nodes`. Only an
+exclusive run restarts them.
+
+### MySQL accounts on your own instance (breaking)
+
+The framework creates only the configured schemas on your MySQL. Create the accounts and grants
+yourself.
+
+### Manifest checks (breaking)
+
+`op.upload` `to:` must be a plain file name. An `action.concurrent` `db:` must be a route of a
+`requires:` service. `seed_when: post_start` with `matrix:` is refused.
+
+### Operator jars per release
+
+With several releases of one Striim series in the `STRIIM_BUILD_*` matrix, each release's jar is
+`<Op>-<suffix>.jar`. Add `.release-build-*.xml` to your repo's `.gitignore`.
+
 ## v0.2.0
 
 ### Timed recovery requires RUNNING (breaking)

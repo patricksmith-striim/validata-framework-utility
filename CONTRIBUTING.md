@@ -134,6 +134,12 @@ performance extension, and the design notes on ownership, lifecycle and exact co
 
 Maintainers cut tagged releases with `tools/release.py`: [docs/internals/RELEASING.md](docs/internals/RELEASING.md).
 
+A pull request that changes what a user sees adds an entry under `## Unreleased` in
+[RELEASE-NOTES.md](RELEASE-NOTES.md), in plain words, with what changed for the user first. If
+users must do something when they move to it, it also adds a heading under `## Unreleased` in
+[docs/UPGRADING.md](docs/UPGRADING.md). Consumers pin commits of `main`, so these sections are how
+they learn what a newer commit changes. The release turns both into the version's own sections.
+
 ## Pull requests
 
 - One change per pull request, with its tests and docs.

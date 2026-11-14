@@ -1,6 +1,99 @@
 # Release notes
 
-One entry per release, newest first: the pull requests it contains.
+One entry per release, newest first. `## Unreleased` at the top is what `main` has gained since
+the last release; the release makes it that version's entry.
+
+## Unreleased
+
+**Breaking changes and changed behaviour**
+
+- **Misspelt or unknown keys in an assertion spec are refused at load.** This covers keys inside
+  a `data`, `diff`, `file`, `gcs` or `json` spec, and inside a `ddl`, `seed`, `server_files`,
+  `generate`, `concurrent` or `stop_start_cycle` entry. An incomplete `data`, `diff`, `file`,
+  `gcs` or `json` spec is refused too. Before, such a key was ignored, so `exat: true` silently
+  ran a weaker comparison, or the case was refused only after deploy. `striim-test doctor`
+  exits 2 on these.
+- **`expect_halt_contains` fails in Docker mode when the halt reason cannot be checked.** When a
+  halt happens while the app runs, the reason is read from the cluster's server log. If that log
+  cannot be read, or holds nothing since the case deployed, the case now fails and says why.
+  Before, it passed with `halt reason not checked (native mode)`. This failure is not an
+  assertion record, so an `xfail` on the `halt` tier does not absorb it. Native mode is
+  unchanged: the case passes without the check, and its record says so.
+- **Operator and UDF jars are rebuilt when anything they are built from changes, in both
+  engines.** That is: the module's source, its `pom.xml`, the parent pom it declares, every
+  source root the pom adds (`FieldCommon`, `OpenProcessorCommon`), or a deleted source file.
+  Before, the integration and perf tiers reused a jar after a `FieldCommon` edit, and neither
+  engine noticed a deleted file or a parent-pom edit. Both engines now keep the same
+  `<jar>.sources` record, so a jar built by one is reused by the other. **The first live run
+  after upgrading rebuilds each jar once**, because no live jar has a record yet. The integration
+  tier rebuilds each `FieldCommon` module once. The integration and perf tiers no longer rebuild
+  a module whose pom does not add `OpenProcessorCommon` when that changes.
+- **Integration: one test item per variant group.** A case with variants becomes several items,
+  named `case[variant]` (`case[a+b]` when variants share a service). `-m <service>` now runs only
+  that service's variants. Scripts or reports that name items by id see the new ids.
+  `INT_VARIANT_ITEMS=0` restores one item per case. `INT_EMPTY_SELECTION_OK=1` lets a `-m` that
+  selects nothing exit 0. (#90)
+- **Integration: a run in which every case skipped exits 1**, when the cases skipped because the
+  host could not run them. `INT_ALLOW_ALL_SKIPPED=1` opts out, except when a build was the
+  cause. `striim-test doctor` now predicts what would skip or refuse a run, and `--strict` fails
+  on those warnings. (#62)
+- **Each live and integration run writes per-case records** to
+  `<project>/.local-evidence/case-records`. `SLT_CASE_RECORDS` names another directory, and `off`
+  writes none. Add `.local-evidence/` to your repo's `.gitignore`; the consumer template now has
+  it. (#78, #79)
+- **`assert.diff` times are measured differently.** The lag clock starts when the app starts, or
+  when the last `post_start` input lands, instead of at the first poll. Each poll counts the
+  target before reading it in full. A target already equal at the first poll is marked
+  `elapsed_upper_bound: true`. `elapsed_s` values are smaller on large tables, so compare times
+  only between runs on the same framework version. (#56, #60)
+- **Lifecycle `initial-load`:** an app that finishes its load (COMPLETED or QUIESCED) before the
+  RUNNING check now passes that check. Other modes fail at once on either status, instead of
+  waiting for the deadline. (#54)
+- **Integration under `SLT_INFRA_OWNERSHIP=shared`:** a running, healthy shared service is reused
+  and never recreated from a second checkout. An unhealthy one, or one stopped from another
+  checkout, fails the case and names that checkout. (#81)
+- **GoldenGate trail writer:** an UPDATE that changes the key is written as UPDATEPK with the
+  before-image key, so a key change reaches the target. (#72)
+- **The Docker Striim image runs with `LANG`/`LC_ALL` `C.UTF-8`**, so the JVM writes non-Latin
+  text correctly. (#76)
+
+**New**
+
+- `SLT_STRIIM_TRYOUT_JARS`: run the Docker cluster with replacement Platform or Agent jars, and
+  record them in each case's evidence. See [docs/TRYOUT-JARS.md](docs/TRYOUT-JARS.md). (#53)
+- `SLT_UI_FORM`: save each component as the Flow Designer would before deploy (`replay`, or
+  `browser` with headless Chromium; optional extra `ui`). (#64, #65, #66, #69, #70)
+- `recover.app`: stop or quiesce an application other than `${APP}`. (#67)
+- `alter_recompile`: `interrupt: quiesce`, and `server_files` placed once the recompiled app is
+  running. Trail writer: optional GoldenGate TxnID/CSN tokens. (#71, #72)
+- A `postgres-admin` route for in-doubt commit cases (a short list of superuser statements). (#73, #74)
+- A service may declare `family:`. BigQuery handling follows the family, so a repo can ship its
+  own BigQuery emulator under another name. (#80)
+- A Bigtable emulator service on both tiers, as groundwork: table and row helpers only, with no
+  manifest setup or assertion yet. Its overlay is always applied to the Docker cluster. (#85)
+- Integration: a stock `mariadb` service and route (#92); per-event recovery `position` and
+  resume by position (#84); `INT_VARIANT_WORKERS` to drive variant groups concurrently (#87);
+  `assert.monitor` for `DDL_METRICS` (exact) and `ADAPTER_BASIC` (subset) (#93); mock source
+  fields up to 1600 columns (#94).
+- Integration: a case that sets both `expect_log` and `expect_error` gets a warning at load,
+  because `expect_log` is not checked there. (#82)
+- A prompt template for writing tests for an application you already have (#52); the README
+  links a ParallelLoader quick start (#55).
+
+**Checks and fixes**
+
+- The `vertica-admin` route keeps the server's search path. (#57)
+- Spanner `ARRAY<JSON>` and `jsonb[]` elements are read as JSON, not `{}`. (#63)
+- gRPC's fork log line no longer fails a Spanner or BigQuery case's inventory listing. (#61)
+- Integration mock and stand-ins: the monitor types `DDL_METRICS`, `LAST_BATCH_INFO`,
+  `DATABASE_WRITE_INFO`, `TIME_TAKEN_FOR_MERGE`, `ADAPTER_BASIC` and `ADAPTER_DETAIL`; the
+  exception-store publish route and stemma paths; the `Position` constructors; and cached and
+  compact paths, as the platform has them. (#75, #77, #83, #86, #88, #89, #93)
+- Framework tests: the six `assert:` tiers no test reached are now exercised through the plugin,
+  as are the Postgres reset guard and the three surplus-data refusals (a target with extra rows,
+  an extra emitted event, an unexpected emitted key). Tests only; no behaviour change.
+- Internal: the paths core block carries `SLT_STRIIM_TRYOUT_JARS` in both engines, and the
+  settings reference and a fault-evidence test are fixed. (#58, #59, #68, #91)
 
 ## v0.3.2 (2026-10-27)
 
