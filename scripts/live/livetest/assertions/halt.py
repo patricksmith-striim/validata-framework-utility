@@ -8,7 +8,7 @@ from livetest.striim import TERMINAL_STATUSES, StriimTimeout
 
 def assert_halt(client, app, timeout: int, poll: float = 2.0,
                 *, db: str | None = None, progress=None,
-                contains: tuple = (), log_tail=None) -> list[dict]:
+                contains: tuple = (), log_tail=None, mode: str | None = None) -> list[dict]:
     # The `expect_halt` assertion: the test's CORRECT outcome is the app entering a
     # terminal status (HALT/CRASH/TERMINATED/DEPLOY_FAILED) -- e.g. a product raise-path
     # where a bad/No-Op event fails the batch. This is the inverse of assert_smoke: here a
@@ -22,9 +22,11 @@ def assert_halt(client, app, timeout: int, poll: float = 2.0,
     # `contains` (expect_halt_contains) narrows the pass condition from "terminal for any
     # reason" to "terminal AND the reason names these substrings". current_status gives no
     # error text, so the reason comes from `log_tail()` -- a zero-arg callable returning the
-    # node server-log tail (plugin._node_log_tail). That returns "" on native single-node,
-    # where the check is impossible: we PASS but stamp "halt reason not checked (native
-    # mode)" into the record detail so the gap is greppable, never silently skipped.
+    # node server-log slice (plugin._halt_log_tail). `mode` is the Striim context's mode.
+    # Only "native" has no node log to read: there we PASS but stamp "halt reason not checked
+    # (native mode)" into the record detail so the gap is greppable, never silently skipped.
+    # In any other mode the log exists, so a tail that raised or came back empty means the
+    # reason was never checked, and that FAILS: a halt for the wrong reason must not pass.
     apps = [app] if isinstance(app, str) else list(app)
     started = time.monotonic()
     deadline = started + timeout
@@ -42,8 +44,16 @@ def assert_halt(client, app, timeout: int, poll: float = 2.0,
                 if log_tail is not None:
                     try:
                         tail = log_tail() or ""
-                    except Exception as te:      # degrades to the caveat path, not a false failure
+                    except Exception as te:      # native: the caveat path; otherwise a failure below
                         tail, tail_err = "", te
+                if not tail.strip() and mode != "native":
+                    why = (f"the node log could not be read ({tail_err})" if tail_err is not None
+                           else "no node-log reader was given" if log_tail is None
+                           else "the node log has no text since the case deployed")
+                    detail = (f"expect_halt_contains: terminal as expected ({shown}) but {why}, so "
+                              f"{list(contains)!r} could not be checked ({mode or 'unknown'} mode)")
+                    raise AssertionFailed(detail, [build_assertion_result(
+                        type="halt", status="failed", spec={}, target=None, db=db, detail=detail)])
                 if not tail.strip():
                     why = (f"node-log tail unavailable ({tail_err})" if tail_err is not None
                            else "no node-log tail on this deployment mode")

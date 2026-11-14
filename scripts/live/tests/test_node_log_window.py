@@ -106,3 +106,74 @@ def test_a_node_that_cannot_be_read_does_not_sink_the_assertion():
         raise RuntimeError("docker exec failed")
 
     assert plugin._node_log_since(_Ctx(), {n: 5 for n in stack.app_nodes()}, run=_run) == ""
+
+
+# --- the halt check's reader: a log that could not be read is an error, not an empty slice ----
+# `_node_log_since` returns "" for a node it could not read, which suits the OP-poison scan; the
+# expect_halt_contains check reads through `_halt_log_tail`, which raises when no node's slice
+# could be read, so the docker-mode halt assertion fails with the reason instead of passing.
+
+import pytest  # noqa: E402
+from types import SimpleNamespace  # noqa: E402
+
+from livetest.assertions import AssertionFailed  # noqa: E402
+from livetest.assertions.halt import assert_halt  # noqa: E402
+
+
+def test_halt_reader_refuses_a_cluster_whose_marks_failed():
+    failing = lambda argv: SimpleNamespace(returncode=1, stdout="", stderr="no such container")  # noqa: E731
+    marks = plugin._node_log_marks(_Ctx(), run=failing)
+    assert marks == {}
+    with pytest.raises(RuntimeError, match="no start mark") as exc:
+        plugin._halt_log_tail(_Ctx(), marks, run=failing)
+    for node in stack.app_nodes():
+        assert node in str(exc.value)
+
+
+def test_halt_reader_refuses_when_every_read_raises():
+    def _run(argv):
+        raise RuntimeError("docker exec failed")
+    with pytest.raises(RuntimeError, match="docker exec failed"):
+        plugin._halt_log_tail(_Ctx(), {n: 5 for n in stack.app_nodes()}, run=_run)
+
+
+def test_halt_reader_refuses_when_every_read_exits_non_zero():
+    failed = lambda argv: SimpleNamespace(returncode=1, stdout="", stderr="container is restarting")  # noqa: E731
+    with pytest.raises(RuntimeError, match="container is restarting"):
+        plugin._halt_log_tail(_Ctx(), {n: 5 for n in stack.app_nodes()}, run=failed)
+
+
+def test_halt_reader_uses_the_nodes_it_could_read():
+    # A node stopped by the case (a failover scenario) must not hide the reason on the other.
+    first, *rest = stack.app_nodes()
+
+    def _run(argv):
+        if argv[2] == first:
+            return SimpleNamespace(returncode=0, stdout="ORA-00001 unique constraint", stderr="")
+        return SimpleNamespace(returncode=1, stdout="", stderr="container is not running")
+    marks = {n: 5 for n in stack.app_nodes()}
+    assert "ORA-00001" in plugin._halt_log_tail(_Ctx(), marks, run=_run)
+
+
+def test_halt_reader_returns_nothing_off_the_docker_cluster():
+    assert plugin._halt_log_tail(_Ctx(mode="native"), {}, run=lambda a: None) == ""
+
+
+def test_the_poison_scan_still_reads_an_unreadable_node_as_empty():
+    def _run(argv):
+        raise RuntimeError("docker exec failed")
+    assert plugin._node_log_since(_Ctx(), {n: 5 for n in stack.app_nodes()}, run=_run) == ""
+    assert plugin._node_log_since(_Ctx(), {}, run=_run) == ""
+
+
+def test_failed_marks_fail_a_docker_halt_check_end_to_end():
+    failing = lambda argv: SimpleNamespace(returncode=1, stdout="", stderr="no such container")  # noqa: E731
+    marks = plugin._node_log_marks(_Ctx(), run=failing)
+
+    class Halted:
+        def current_status(self, app):
+            return "CRASH"
+    with pytest.raises(AssertionFailed, match="node log could not be read.*no start mark") as exc:
+        assert_halt(Halted(), "NS.App", timeout=1, contains=("ORA-00001",), mode="docker",
+                    log_tail=lambda: plugin._halt_log_tail(_Ctx(), marks, run=failing))
+    assert [r["status"] for r in exc.value.records] == ["failed"]

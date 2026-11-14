@@ -968,12 +968,13 @@ def _node_log_marks(ctx, run=None) -> dict:
     return marks
 
 
-def _node_log_since(ctx, marks: dict, run=None, nbytes: int = 20000) -> str:
+def _node_log_since(ctx, marks: dict, run=None, nbytes: int = 20000, errors: list | None = None) -> str:
     """Each app node's server log from `marks` onward.
 
     A node without a mark is not read: its tail would include earlier cases' text. Falls back
     to the fixed tail when the log is now SHORTER than the mark -- it rotated or was truncated
-    mid-test, so everything in it was written after the mark.
+    mid-test, so everything in it was written after the mark. A node that could not be read
+    contributes nothing; when `errors` is given, why is appended to it, one entry per node.
     """
     if getattr(ctx, "mode", None) != "docker":
         return ""
@@ -982,6 +983,8 @@ def _node_log_since(ctx, marks: dict, run=None, nbytes: int = 20000) -> str:
     for node in stack.app_nodes():
         mark = marks.get(node)
         if mark is None:
+            if errors is not None:
+                errors.append(f"{node}: no start mark (its log size could not be read when the case deployed)")
             continue
         try:
             # +N is 1-based, so mark+1 starts at the first byte written after the mark.
@@ -989,10 +992,34 @@ def _node_log_since(ctx, marks: dict, run=None, nbytes: int = 20000) -> str:
                      f"if [ $(wc -c < {_NODE_LOG}) -ge {mark} ]; "
                      f"then tail -c +{mark + 1} {_NODE_LOG}; "
                      f"else tail -c {nbytes} {_NODE_LOG}; fi"])
+            rc = getattr(r, "returncode", 0)
+            if rc != 0 and errors is not None:
+                errors.append(f"{node}: docker exec exited {rc}: {(getattr(r, 'stderr', '') or '').strip()[:300]}")
             out.append(getattr(r, "stdout", "") or "")
-        except Exception:
-            pass
+        except Exception as e:
+            if errors is not None:
+                errors.append(f"{node}: {e}")
     return "\n".join(out)
+
+
+_HALT_LOG_READ_TIMEOUT_S = 60
+
+
+def _halt_log_tail(ctx, marks: dict, run=None) -> str:
+    """The node-log slice `expect_halt_contains` is checked against.
+
+    `_node_log_since` reads an unreadable node as empty, which suits the OP-poison scan. Here
+    an empty result could pass a halt unverified, so when no node's slice has any text and a
+    node could not be read, this raises with why; `assert_halt` fails the halt in docker mode.
+    A node that could be read is enough: the case may have stopped the other one.
+    """
+    run = run or (lambda argv: subprocess.run(argv, capture_output=True, text=True,
+                                              timeout=_HALT_LOG_READ_TIMEOUT_S))
+    errors: list = []
+    text = _node_log_since(ctx, marks, run=run, errors=errors)
+    if errors and not text.strip():
+        raise RuntimeError("; ".join(errors))
+    return text
 
 
 def _op_poison_restart_refusal(config) -> str | None:
@@ -3799,8 +3826,8 @@ class LiveItem(pytest.Item):
                         records = assert_halt(
                             client, smoke_apps, timeout=m.timeout,
                             progress=_hb("expect_halt: waiting for terminal HALT"),
-                            contains=m.expect_halt_contains,
-                            log_tail=lambda: _node_log_since(ctx, log_marks))
+                            contains=m.expect_halt_contains, mode=ctx.mode,
+                            log_tail=lambda: _halt_log_tail(ctx, log_marks))
                         self._slt_records += records
                         for rec in records:
                             if rec.get("status") == "passed" and m.expect_halt_contains:

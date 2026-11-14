@@ -102,13 +102,13 @@ def test_halt_contains_fails_when_log_tail_missing_substring():
 
 def test_halt_contains_passes_with_native_mode_caveat():
     records = assert_halt(StubClient(status="HALT"), "NS.App", timeout=5, poll=0,
-                          contains=("conflict",), log_tail=lambda: "")
+                          mode="native", contains=("conflict",), log_tail=lambda: "")
     assert records[0]["status"] == "passed"
     assert "halt reason not checked (native mode)" in records[0]["detail"]
 
 def test_halt_contains_passes_with_caveat_when_no_log_tail_callable():
     records = assert_halt(StubClient(status="HALT"), "NS.App", timeout=5, poll=0,
-                          contains=("conflict",), log_tail=None)
+                          mode="native", contains=("conflict",), log_tail=None)
     assert records[0]["status"] == "passed"
     assert "halt reason not checked (native mode)" in records[0]["detail"]
 
@@ -128,7 +128,7 @@ def test_halt_contains_passes_with_caveat_when_log_tail_whitespace_only():
     # is truthy but carries no reason text. Must degrade to the caveat, not a hard
     # AssertionFailed naming every substring as "missing" from a log that was never read.
     records = assert_halt(StubClient(status="HALT"), "NS.App", timeout=5, poll=0,
-                          contains=("conflict",), log_tail=lambda: "\n")
+                          mode="native", contains=("conflict",), log_tail=lambda: "\n")
     assert records[0]["status"] == "passed"
     assert "halt reason not checked (native mode)" in records[0]["detail"]
 
@@ -144,7 +144,7 @@ def test_halt_contains_degrades_when_log_tail_raises():
     def _boom():
         raise RuntimeError("docker exec failed")
     records = assert_halt(StubClient(status="HALT"), "NS.App", timeout=5, poll=0,
-                          contains=("conflict",), log_tail=_boom)
+                          mode="native", contains=("conflict",), log_tail=_boom)
     assert records[0]["status"] == "passed"
     assert "halt reason not checked (native mode)" in records[0]["detail"]
     assert "docker exec failed" in records[0]["detail"]
@@ -255,3 +255,57 @@ def test_startup_halt_record_names_every_skipped_transaction_step(tmp_path):
     for item in skipped[:-1]:
         assert item in record['detail']
     assert 'transaction setup' not in record['detail']
+
+
+# --- docker mode: a halt reason that cannot be read is a failure, not an unverified pass ------
+# The node log exists in docker mode, so an unreadable or empty slice means the reason was never
+# checked. Only native mode, where there is no log to read, keeps the "not checked" pass.
+
+def _unverifiable(log_tail, mode="docker"):
+    with pytest.raises(AssertionFailed) as exc:
+        assert_halt(StubClient(status="HALT"), "NS.App", timeout=5, poll=0,
+                    contains=("conflict",), mode=mode, log_tail=log_tail)
+    recs = exc.value.records
+    assert len(recs) == 1 and recs[0]["status"] == "failed" and recs[0]["type"] == "halt"
+    assert recs[0]["detail"] == str(exc.value)
+    assert "NOT verified" not in recs[0]["detail"] and "native mode" not in recs[0]["detail"]
+    return recs[0]["detail"]
+
+
+def test_docker_halt_contains_fails_when_the_node_log_cannot_be_read():
+    def _boom():
+        raise RuntimeError("docker exec failed")
+    detail = _unverifiable(_boom)
+    assert "node log could not be read" in detail and "docker exec failed" in detail
+    assert "'conflict'" in detail and "HALT" in detail
+
+
+@pytest.mark.parametrize("tail", ["", "\n", None])
+def test_docker_halt_contains_fails_when_the_node_log_is_empty(tail):
+    detail = _unverifiable(lambda: tail)
+    assert "no text since the case deployed" in detail
+
+
+def test_docker_halt_contains_fails_without_a_log_reader():
+    assert "no node-log reader" in _unverifiable(None)
+
+
+@pytest.mark.parametrize("mode", [None, "remote"])
+def test_only_native_mode_keeps_the_unverified_pass(mode):
+    _unverifiable(lambda: "", mode=mode)
+
+
+def test_docker_halt_contains_still_matches_a_readable_log():
+    records = assert_halt(StubClient(status="HALT"), "NS.App", timeout=5, poll=0, contains=("conflict",),
+                          mode="docker", log_tail=lambda: "...conflict on USERS...")
+    assert records[0]["status"] == "passed" and "verified" in records[0]["detail"]
+    with pytest.raises(AssertionFailed, match="missing"):
+        assert_halt(StubClient(status="HALT"), "NS.App", timeout=5, poll=0, contains=("conflict",),
+                    mode="docker", log_tail=lambda: "...nothing relevant...")
+
+
+def test_docker_halt_without_contains_reads_no_log():
+    def _tail():
+        raise AssertionError("log read without expect_halt_contains")
+    records = assert_halt(StubClient(status="HALT"), "NS.App", timeout=5, poll=0, mode="docker", log_tail=_tail)
+    assert records[0]["status"] == "passed"

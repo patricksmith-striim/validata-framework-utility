@@ -35,7 +35,7 @@ What differs in native mode:
 | `op:` / `udf:` jars | copied into the cluster | `STRIIM_HOME` must be the running server's own install, on this machine: the jars are copied into `$STRIIM_HOME/UploadedFiles`. `striim-test doctor --case` checks it |
 | Named-node faults and `placement` | yes, framework cluster and published survivor API | named-node recovery skips; no framework Docker role mapping |
 | `recover: {mode: kill}` | yes | **not supported**: there is no container to kill. The test is skipped, never downgraded to `stop` |
-| `expect_halt_contains` on a halt while running | checked against the server log | the test passes without the check, and its record says `halt reason not checked (native mode)` |
+| `expect_halt_contains` on a halt while running | checked against the server log; a log that cannot be read, or has nothing since the case deployed, fails the test | the test passes without the check, and its record says `halt reason not checked (native mode)` |
 | `assert.jmx` | yes | **not supported**: it fails at once, since there are no exporters to read |
 | `topology: cluster` | two nodes and an agent | needs a server with at least two nodes in `default` and an agent in `Agents`; otherwise the test is skipped |
 | how Striim reaches the databases | `host.docker.internal` | `localhost`, or `SLT_<SERVICE>_VIEW_HOST` |
