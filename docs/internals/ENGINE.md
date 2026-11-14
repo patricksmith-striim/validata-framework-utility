@@ -278,7 +278,7 @@ The live engine modules `progress` implement this check. Manifest loading valida
 
 ### Prove the fault was issued while its precondition held
 
-The live engine modules `progress` implement this check. Manifest loading validates the declared shape before runtime; ownership checks bind reads to the current attempt. See [TEST-YAML.md](../TEST-YAML.md) and the [15-fault-evidence fixture](../../samples/live/15-fault-evidence/README.md).
+The live engine modules `progress` implement this check. Manifest loading validates the declared shape before runtime; ownership checks bind reads to the current attempt. See [TEST-YAML.md](../TEST-YAML.md) and the [14-progress-recovery fixture](../../samples/live/14-progress-recovery/README.md).
 
 ### Prove the route transports a fresh marker after recovery
 

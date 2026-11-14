@@ -54,8 +54,7 @@ step in detail, with the output to expect and what to do when something fails.
 | `11-transaction-seeds` | overlapping sessions, savepoints and a transaction across recovery | Postgres CDC; STOP/restore |
 | `12-snapshot-observer` | consistent snapshots of related target tables | Postgres CDC; transaction preservation; STOP/restore |
 | `13-append-only-audit` | immutable delivery rows with counted multiset comparison | Postgres |
-| `14-progress-recovery` | interrupt CDC inside a declared target progress window | Postgres CDC; STOP/restore |
-| `15-fault-evidence` | fault-time progress evidence and missed-window failure | Postgres CDC; STOP/restore |
+| `14-progress-recovery` | interrupt CDC inside a declared target progress window, with the fault-time evidence and the missed-window failure | Postgres CDC; STOP/restore |
 | `16-recovery-sentinel` | fresh route proof after recovery and before assertions | Postgres CDC; STOP/restore |
 | `17-one-node-failover` | kill one flow owner and prove survivor placement and complete data | Postgres CDC; Docker cluster, two app nodes and agent; published survivor API; **kills one shared app node** |
 | `18-kafka-nothing` | no output in a bounded window after a Kafka sentinel; fresh owned topics | Postgres CDC; Kafka |

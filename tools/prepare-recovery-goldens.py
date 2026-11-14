@@ -11,7 +11,7 @@ from pathlib import Path
 
 SOURCE = "samples/live/14-progress-recovery/expected/rows.csv"
 COPIES = (
-    ("samples/live", ("15-fault-evidence", "16-recovery-sentinel", "17-one-node-failover")),
+    ("samples/live", ("16-recovery-sentinel", "17-one-node-failover")),
     ("scripts/live/regression/framework", ("framework-progress-recovery", "framework-fault-evidence",
                                            "framework-recovery-sentinel", "framework-one-node-failover")),
 )

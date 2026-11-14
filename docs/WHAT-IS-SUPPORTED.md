@@ -205,7 +205,7 @@ tier, and in the integration tier stops the run at collection. `striim-test doct
 | `server_files:` | **supported, not exercised here** (`framework-server-files`) |
 | `action:` `capture`, `alter_recompile`; `drop_recreate_app` `capture` / `stopped_seed` / `tokens` | **supported, not run on a cluster yet**; hermetic tests only |
 | `server_files:` `load:` from outside the test dir (absolute, `${...}`, `gs://`) | **supported, not run on a cluster yet**; hermetic tests only (`gs://` with a fake download) |
-| `op:` / `udf:` (your jars, built with Maven) | **tested**: `samples/code/op` and `samples/code/udf`, both modes, on the Linux host |
+| `op:` / `udf:` (your jars, built with Maven) | **tested**: `samples/code/op` and `samples/code/udf`, on the Linux host. The two samples run in Docker mode only (their file check is under `${OWNED_DIR}`); `op:`/`udf:` itself has no Docker requirement |
 | `tokens:`, `kafka_cleanup_topics:`, `generate:` (GoldenGate trail files) | **supported, not exercised here** |
 | `topology: cluster` | **supported, not exercised here** |
 

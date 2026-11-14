@@ -71,7 +71,7 @@ def _ts(literal: str) -> datetime:
 
 
 def test_the_samples_are_numbered_simplest_first():
-    assert sorted(p.name for p in SAMPLES.iterdir() if p.is_dir()) == list(ASSETS) + list(MYSQL) + ["07-spanner-exact", "08-strict-json", "09-raw-file", "10-bounded-nothing", "11-transaction-seeds", "12-snapshot-observer", "13-append-only-audit", "14-progress-recovery", "15-fault-evidence", "16-recovery-sentinel", "17-one-node-failover", "18-kafka-nothing"] + list(BIGQUERY)
+    assert sorted(p.name for p in SAMPLES.iterdir() if p.is_dir()) == list(ASSETS) + list(MYSQL) + ["07-spanner-exact", "08-strict-json", "09-raw-file", "10-bounded-nothing", "11-transaction-seeds", "12-snapshot-observer", "13-append-only-audit", "14-progress-recovery", "16-recovery-sentinel", "17-one-node-failover", "18-kafka-nothing"] + list(BIGQUERY)
 
 
 @pytest.mark.parametrize("name", list(ASSETS) + list(MYSQL) + list(BIGQUERY))
@@ -361,24 +361,19 @@ def test_progress_stop_sample_keeps_the_fault_window_open():
         {'id': str(n), 'msg': f'row-{n}'} for n in range(1, 5001)]
 
 
-def test_fault_evidence_sample_declares_a_nonfinal_window():
-    m = load_manifest(SAMPLES / "15-fault-evidence/test.yaml")
-    assert m.recover["trigger"]["above"] == 100
-    assert _golden("15-fault-evidence")[1] == _golden("14-progress-recovery")[1]
-
-
-def test_fault_evidence_stop_sample_keeps_the_fault_window_open():
-    root = SAMPLES / '15-fault-evidence'
-    manifest = load_manifest(root / 'test.yaml')
-    trigger = manifest.recover['trigger']
-    delay = re.search(r'CHECK\s*\(pg_sleep\(([0-9.]+)\)\s+IS NOT NULL\)',
-                      (root / 'ddl_target.sql').read_text(), re.I)
-    assert delay is not None, 'STOP needs a paced target so its asynchronous boundary stays inside the window'
-    assert manifest.recover['mode'] == 'stop'
-    assert (trigger['above'], trigger['below']) == (100, 2500)
-    assert (trigger['below'] - trigger['above']) * float(delay[1]) >= 10
-    assert _golden('15-fault-evidence')[1] == [
-        {'id': str(n), 'msg': f'row-{n}'} for n in range(1, 5001)]
+def test_no_two_samples_are_the_same_test():
+    # A sample is copied as a starting point; two that differ only in name, purpose and README
+    # run the same test twice and promise behaviour neither asserts.
+    def body(root):
+        raw = _raw(root.name)
+        raw.pop("name", None), raw.pop("purpose", None)
+        files = {p.relative_to(root).as_posix(): p.read_bytes() for p in sorted(root.rglob("*"))
+                 if p.is_file() and p.name not in ("test.yaml", "README.md")}
+        return raw, files
+    bodies = {p.name: body(p) for p in sorted(SAMPLES.iterdir()) if (p / "test.yaml").is_file()}
+    names = sorted(bodies)
+    same = [(a, b) for i, a in enumerate(names) for b in names[i + 1:] if bodies[a] == bodies[b]]
+    assert same == []
 
 
 def test_recovery_sentinel_sample_reuses_its_declared_marker():

@@ -390,6 +390,8 @@ op:
 - Both paths are relative to the project root: `SLT_PROJECT_ROOT`, or this clone.
 - You need Maven, a JDK 17 and `STRIIM_HOME`. Against your own Striim server, `STRIIM_HOME` must be
   that server's own install, on this machine.
+- The two samples run in Docker mode only: their `lifecycle:` block puts the file check under
+  `${OWNED_DIR}`, which the framework creates only on its own Docker cluster.
 
 ## 9. Move your tests into your own repo
 
@@ -553,7 +555,7 @@ Start with [14-progress-recovery](../samples/live/14-progress-recovery/README.md
 
 ### Prove the fault was issued while its precondition held
 
-Start with [15-fault-evidence](../samples/live/15-fault-evidence/README.md), then use the corresponding block in [TEST-YAML.md](TEST-YAML.md). The [gallery case](../scripts/live/regression/framework/framework-fault-evidence/README.md) exercises the same framework contract.
+Start with [14-progress-recovery](../samples/live/14-progress-recovery/README.md) ("What the run records"), then use the corresponding block in [TEST-YAML.md](TEST-YAML.md). The [gallery case](../scripts/live/regression/framework/framework-fault-evidence/README.md) exercises the same framework contract.
 
 ### Prove the route transports a fresh marker after recovery
 

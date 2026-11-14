@@ -982,7 +982,7 @@ A command failure retains its held precondition but cannot pass the interruption
 `fault-missed` and `fault-interrupt-error` are framework recovery failures;
 `xfail` cannot absorb them. Inspect the suffix (`progress-deadline`,
 `progress-window-missed`, `progress-read-error`, `progress-app-not-running`) and
-the retained evidence. See [15-fault-evidence](../samples/live/15-fault-evidence/README.md).
+the retained evidence. See [14-progress-recovery](../samples/live/14-progress-recovery/README.md), "What the run records".
 
 Kafka offsets describe the next record position; the trigger observes the named
 partition, never a sum across partitions. Checkpoint advances are measured anew
@@ -2556,7 +2556,7 @@ Worked case: [14-progress-recovery](../samples/live/14-progress-recovery/README.
 
 Fault evidence retains `windowOpened` (the first in-window value and time), the pre-command value, `issuedAt`, the bounded `afterInterrupt` observation, and `settledStatus`, the status a STOP or QUIESCE left the app in. When work finishes during STOP, the record is failed with `interrupted: true`; no command is retried. Timed recovery also requires RUNNING at issuance.
 
-Worked case: [15-fault-evidence](../samples/live/15-fault-evidence/README.md). Framework gallery: [framework-fault-evidence](../scripts/live/regression/framework/framework-fault-evidence/README.md).
+Worked case: [14-progress-recovery](../samples/live/14-progress-recovery/README.md), "What the run records". Framework gallery: [framework-fault-evidence](../scripts/live/regression/framework/framework-fault-evidence/README.md).
 
 Worked case: [16-recovery-sentinel](../samples/live/16-recovery-sentinel/README.md). Framework gallery: [framework-recovery-sentinel](../scripts/live/regression/framework/framework-recovery-sentinel/README.md).
 A hosting-node fault resolves all owners before post-start seeds. At issuance it checks flow MON's single-owner count and the selected server's deployment and runtime STATUS once, outside progress polling, then re-reads progress. An unreadable, moved or multi-owner flow refuses the fault. Sample17 paces each target insert with a10ms table CHECK, leaving the exact expected rows unchanged.

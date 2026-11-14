@@ -26,7 +26,9 @@ own, event in and event out without a Striim server, use the integration tier
 | [`samples/code/udf`](../samples/code/udf/README.md) | a UDF library, `ReferenceUdf` | `referenceudf-mark-processed` |
 
 Both copy Postgres rows from a source table to a target table and stamp `userdata.processed=true`
-on every event. Run them from the clone root:
+on every event. They run in Docker mode only, because their file check writes under the
+framework's `${OWNED_DIR}` ([samples/code/README.md](../samples/code/README.md)). Run them from the
+clone root:
 
 ```
 striim-test run samples/code        # or samples/code/udf, samples/code/op
