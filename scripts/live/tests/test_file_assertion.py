@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from livetest.assertions import AssertionFailed
 from livetest.assertions.file import (
@@ -554,11 +556,10 @@ def test_an_absent_row_ALONGSIDE_a_real_row_is_still_accepted():
 
 
 def test_an_absent_row_with_NO_keys_is_REFUSED_as_impossible():
-    # Neighbour of the vacuous shape, and a different problem. `_evaluate` keeps events by
-    # the UNRESTRICTED projection, so without `keys:` every compared event projects at least
-    # one column and frozenset() can never appear in the actual set. Such a golden is
-    # IMPOSSIBLE rather than vacuous, and would fail only after the full assertion timeout
-    # with a diff naming no cause -- so it is refused at load, saying which of the two it is.
+    # Neighbour of the vacuous shape, and a different problem. Without `keys:` an all-<absent>
+    # row matches only an event whose whole projected section is empty, never one that merely
+    # lacks the named columns, so for a populated section it is impossible and would fail only
+    # after the full assertion timeout -- it is refused at load, saying which of the two it is.
     import pytest as _pytest, pathlib, tempfile
     from livetest.assertions.file import _load_golden, FileSpecError
     with tempfile.TemporaryDirectory() as d:
@@ -679,3 +680,117 @@ def test_a_long_golden_row_is_refused(tmp_path):
     (tmp_path / "g.csv").write_text("id,name\n1,a,b\n")
     with pytest.raises(FileSpecError, match="data row 1 has more cells"):
         _load_golden_rows(tmp_path, {"path": "/tmp/out", "match": "g.csv"})
+
+
+# ---- which events a projection compares: only true boundary events are dropped ----------
+
+def _wa(row, userdata, **extra):
+    return {"metadata": {"TableName": "s.items", "OperationName": "INSERT"}, "data": row,
+            "before": None, "userdata": userdata, **extra}
+
+
+def test_userdata_match_fails_an_event_the_operator_did_not_stamp(tmp_path):
+    # An Open Processor that forwards the original event on error delivers it with no userdata.
+    # Its row payload is real, so it is compared: an empty projection is not a boundary event.
+    _golden_rows(tmp_path, "g.csv", "processed", "true")
+    spec = {"path": "/o", "match": "g.csv", "project": "userdata", "keys": ["processed"]}
+    stamped = _wa({"id": 1}, {"processed": "true"})
+    for unstamped in (_wa({"id": 2}, None), _wa({"id": 2}, {}), _wa({"id": 2}, {"other": "x"})):
+        with pytest.raises(AssertionFailed, match="event set"):
+            assert_file(lambda p, u=unstamped: json.dumps([stamped, u]), [spec], tmp_path, timeout=0)
+    assert_file(lambda p: json.dumps([stamped, _wa({"id": 2}, {"processed": "true"})]), [spec],
+                tmp_path, timeout=0)
+
+
+def test_userdata_projection_still_drops_a_true_boundary_event(tmp_path):
+    # A BEGIN/COMMIT record carries metadata and no data, before or userdata at all: not a row,
+    # under any projection, even when a metadata key is projected.
+    spec = {"path": "/o", "match": "g.csv", "project": "userdata", "keys": ["processed", "OperationName"],
+            "metadata": ["OperationName"]}
+    _golden_rows(tmp_path, "g.csv", "processed,OperationName", "true,INSERT")
+    boundary = {"metadata": {"OperationName": "COMMIT"}, "data": None, "before": None, "userdata": None}
+    assert_file(lambda p: json.dumps([boundary, _wa({"id": 1}, {"processed": "true"}), boundary]),
+                [spec], tmp_path, timeout=0)
+
+
+def test_distinct_events_counts_an_unstamped_event_under_userdata(tmp_path):
+    spec = {"path": "/o", "distinct_events": 1, "project": "userdata", "keys": ["processed"]}
+    stamped = _wa({"id": 1}, {"processed": "true"})
+    assert_file(lambda p: json.dumps([stamped, stamped]), [spec], tmp_path, timeout=0)
+    with pytest.raises(AssertionFailed, match="distinct projected events=2"):
+        assert_file(lambda p: json.dumps([stamped, _wa({"id": 2}, None)]), [spec], tmp_path, timeout=0)
+
+
+def test_data_match_compares_a_before_only_event(tmp_path):
+    # An event with a before-image and no data is a row, not a boundary: under project: data it
+    # projects to its metadata keys only and must be in the golden to pass.
+    _golden_rows(tmp_path, "g.csv", "ID,OperationName", "1,INSERT")
+    spec = {"path": "/o", "match": "g.csv", "metadata": ["OperationName"]}
+    before_only = {"metadata": {"OperationName": "DELETE"}, "data": None, "before": {"ID": "1"}}
+    with pytest.raises(AssertionFailed, match="event set"):
+        assert_file(lambda p: json.dumps([_wa({"ID": "1"}, None), before_only]), [spec], tmp_path, timeout=0)
+
+
+# ---- a file that never finishes decoding fails at the deadline ---------------------------
+
+def test_permanently_truncated_last_event_fails_at_the_deadline(tmp_path):
+    text = '{"id":1}\n{"id":2}\n{"id":3,"name":"tru'            # the third event never completes
+    with pytest.raises(AssertionFailed, match="do not decode as a JSON event") as e:
+        assert_file(lambda p: text, [{"path": "/o", "events": 2}], tmp_path, timeout=0.2, poll=0.01)
+    assert e.value.records[0]["status"] == "failed"
+    with pytest.raises(AssertionFailed, match="do not decode as a JSON event"):
+        assert_file(lambda p: '[{"data":{"ID":"1"}},\n {"data":{"ID', [{"path": "/o", "min_events": 1}],
+                    tmp_path, timeout=0.2, poll=0.01)
+
+
+def test_non_object_values_fail_at_the_deadline(tmp_path):
+    for text in ('{"data":{"id":1}}\n"oops"\n', '[{"data":{"id":1}}, 42]'):
+        with pytest.raises(AssertionFailed, match="not an event object"):
+            assert_file(lambda p, t=text: t, [{"path": "/o", "events": 1}], tmp_path, timeout=0.2, poll=0.01)
+
+
+def test_a_last_event_caught_mid_write_is_polled_until_complete(tmp_path):
+    # Tolerance while the writer is still writing is kept: a partial tail that completes on a
+    # later read passes.
+    reads = ['[{"id":1},{"id":2},{"id":3,"na', '[{"id":1},{"id":2},{"id":3,"name":"x"}]']
+
+    def read(_p):
+        return reads.pop(0) if len(reads) > 1 else reads[0]
+    assert_file(read, [{"path": "/o", "events": 3}], tmp_path, timeout=5, poll=0.01)
+    assert reads == ['[{"id":1},{"id":2},{"id":3,"name":"x"}]']
+
+
+def test_a_mid_write_read_inside_the_stable_window_is_read_again(tmp_path):
+    # The spec passed; a later read catches a duplicate mid-write. A distinct-set match is not
+    # changed by the completed duplicate, so the partial read must not fail the window.
+    _golden_rows(tmp_path, "g.csv", "ID", "1")
+    full = '[{"data":{"ID":"1"}}'
+    reads = [full + "]", full + ', {"data":{"I', full + ', {"data":{"ID":"1"}}]']
+
+    def read(_p):
+        return reads.pop(0) if len(reads) > 1 else reads[0]
+    assert_file(read, [{"path": "/o", "match": "g.csv", "stable_seconds": 0.2}], tmp_path, timeout=5, poll=0.01)
+    assert len(reads) == 1
+
+
+def test_a_tail_that_never_completes_inside_the_stable_window_fails(tmp_path):
+    _golden_rows(tmp_path, "g.csv", "ID", "1")
+    reads = ['[{"data":{"ID":"1"}}]', '[{"data":{"ID":"1"}}, {"data":{"I']
+
+    def read(_p):
+        return reads.pop(0) if len(reads) > 1 else reads[0]
+    with pytest.raises(AssertionFailed, match="do not decode as a JSON event"):
+        assert_file(read, [{"path": "/o", "match": "g.csv", "stable_seconds": 5}], tmp_path, timeout=0.3, poll=0.01)
+
+
+def test_before_projection_skips_an_event_with_no_before_image(tmp_path):
+    # An INSERT has no pre-image by nature: under project: before it is not a row, so a golden of
+    # UPDATE before-images matches a CDC stream that also carries INSERTs.
+    _golden_rows(tmp_path, "g.csv", "ID,NAME", "1,old")
+    spec = {"path": "/o", "match": "g.csv", "project": "before"}
+    insert = {"metadata": {"OperationName": "INSERT"}, "data": {"ID": "1", "NAME": "old"}, "before": None}
+    update = {"metadata": {"OperationName": "UPDATE"}, "data": {"ID": "1", "NAME": "new"},
+              "before": {"ID": "1", "NAME": "old"}}
+    assert_file(lambda p: json.dumps([insert, update]), [spec], tmp_path, timeout=0)
+    with pytest.raises(AssertionFailed, match="event set"):
+        assert_file(lambda p: json.dumps([insert]), [spec], tmp_path, timeout=0)

@@ -2124,6 +2124,19 @@ case. Each edge is one mapping containing both selectors; two separate list item
   silently overwriting current values — assert it explicitly).
 - `all` — `data` + `userdata` merged.
 
+**Which events are compared.** `match` and `distinct_events` skip only a true boundary event: one
+with no `data`, `before` or `userdata` at all, such as an AvroConverterOp BEGIN/COMMIT record, even
+when it carries `metadata`. Every other event is compared, even when the projected section is empty:
+under `project: userdata`, an event nothing stamped projects to no columns and fails a golden that
+expects the stamp. The one exception is `project: before`: an event with no before-image (an INSERT
+has none) is skipped, so a golden of UPDATE before-images matches a stream that also carries
+INSERTs. `events` and `min_events` count every event, boundary events included.
+
+**A file that does not decode.** A read can catch the writer mid-event, so a last event that does
+not decode yet is read again on the next poll. It never passes, though: if it is still undecodable
+at the timeout, the spec fails and names it. A complete JSON value that is not an event object
+(`"oops"`, `42`) fails the same way.
+
 The framework reads the declared file and its numeric rollover siblings — `/tmp/out` →
 `/tmp/out.00`, and with an extension the sequence goes before it, split at the name's first dot
 (`/tmp/rows.json` → `/tmp/rows.00.json`) — nothing else in the directory. It reads server-side files
@@ -2185,8 +2198,8 @@ after the assertion timeout.** A golden
 whose every row is all-`<absent>` strips to nothing: it is not EMPTY, so the empty-golden
 guard cannot see it, but it asserts only "some event carries none of the projected keys" —
 which an unenriched record satisfies, so it would stay green through a total enrichment
-failure. And an `<absent>` row in a spec with no `keys:` can never match at all, because
-without `keys` every compared event projects at least one column. Both raise a
+failure. And an `<absent>` row in a spec with no `keys:` matches only an event whose whole
+projected section is empty, never one that merely lacks the columns the row names. Both raise a
 `FileSpecError` naming which of the two problems it is.
 
 `<absent>` is a **`file`-assertion feature only.** It has no meaning under `assert.data`,
