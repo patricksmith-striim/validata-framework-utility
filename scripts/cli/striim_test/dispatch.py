@@ -179,6 +179,28 @@ def striim_env(env) -> dict:
     return out
 
 
+def shell_path_env(base=None, cwd=None) -> dict:
+    """The path keys the shell sets to a relative value, made absolute against the directory
+    striim-test runs in. That is where the CLI resolved them; a tier child runs in its run
+    directory, so given the relative value it would resolve it again, somewhere else. Each entry
+    of a list key (SLT_LIVE_CASES) is made absolute on its own; a value from .env is left to the
+    child, which resolves it against the .env's directory as the CLI does."""
+    from livetest import paths as live_paths
+    src = os.environ if base is None else base
+    cwd = Path.cwd() if cwd is None else Path(cwd)
+    out = {}
+    for key in live_paths._PATH_KEYS:
+        value = src.get(key) or ""
+        if not value.strip():
+            continue
+        entries = value.split(os.pathsep) if key in live_paths._LIST_PATH_KEYS else [value]
+        absolute = [e if not e.strip() or Path(e.strip()).expanduser().is_absolute() else str(cwd / e.strip())
+                    for e in entries]
+        if absolute != entries:
+            out[key] = os.pathsep.join(absolute)
+    return out
+
+
 def location_env(ctx) -> dict:
     """The path keys a tier child reads. With a project manifest, its root and
     suites become SLT_PROJECT_ROOT / SLT_LIVE_CASES / SLT_INT_CASES, and the run's state dir
@@ -324,6 +346,9 @@ def build_pytest_argv(ctx: Ctx, tier: str, path: Path, tier_dir: Path, *, cases,
     if ctx.project.manifest is not None:
         location["GOLD_TARGETS"] = str(ctx.project.manifest)
     env = child_env(ctx.origins, location=location)
+    # Relative path keys from the shell mean what they meant to the CLI (its working directory);
+    # the manifest's location keys below still take precedence.
+    env.update({k: v for k, v in shell_path_env().items() if k != "SLT_FRAMEWORK_HOME"})
     for name in PYTEST_AMBIENT:
         env.pop(name, None)
     env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
