@@ -43,7 +43,7 @@ Finder hide them; `ls -a` shows them.
 
 The validator loads every manifest, checks assertion specs, files and tokens, and checks golden
 consistency by executing the fixture SQL in SQLite; it ends with `PASS: 3 manifests and all offline
-contract checks`. `list` and `--dry-run` print the three cases a run selects without provisioning
+contract checks`, one manifest per case under `tests/live`. `list` and `--dry-run` print the three cases a run selects without provisioning
 or deploying. None of this needs Striim or Docker, and none of it tests an adapter.
 
 ## Run it live
