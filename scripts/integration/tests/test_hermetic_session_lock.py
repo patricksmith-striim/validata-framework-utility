@@ -37,8 +37,9 @@ def _pytest(env: dict, *args) -> subprocess.CompletedProcess:
 def test_a_held_real_session_lock_does_not_refuse_the_hermetic_suite(tmp_path):
     state = tmp_path / "state"
     state.mkdir()
-    # A developer's second stack, as a field shell names it.
-    with FileLock(str(state / ".alt-int-session.lock"), timeout=5):
+    # A developer's second stack, as a field shell names it. timeout=0: a fresh file nothing else
+    # holds, and no FileLock here may wait (test_no_filelock_carries_a_wait).
+    with FileLock(str(state / ".alt-int-session.lock"), timeout=0):
         r = _pytest(_env(state, INT_STACK_PREFIX="alt"), "-m", HERMETIC)
     assert r.returncode == 0, r.stdout[-800:] + r.stderr[-800:]
     assert "another integration-test session" not in r.stdout + r.stderr
@@ -67,7 +68,7 @@ def test_a_session_that_can_select_integration_items_still_takes_the_real_lock(t
     `integration` and `postgres`), so it is a real session and the lock stays where it was."""
     state = tmp_path / "state"
     state.mkdir()
-    with FileLock(str(state / ".int-session.lock"), timeout=5):
+    with FileLock(str(state / ".int-session.lock"), timeout=0):
         r = _pytest(_env(state), "-m", markexpr)
     assert r.returncode == 4, r.stdout[-800:] + r.stderr[-800:]
     assert "another integration-test session is already running" in r.stdout + r.stderr
