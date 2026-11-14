@@ -35,12 +35,13 @@ import re
 import uuid
 import sys
 import subprocess
+import warnings
 from pathlib import Path
 
 from livetest import lockdir, opartifacts, opregistry, stack
 from livetest import infra as _slt_infra   # the shared-service adapter, C7.1
 from livetest import striim_provision as _sp
-from livetest.manifest import load_manifest
+from livetest.manifest import CardinalityWarning, load_manifest
 from livetest.mssqladmin import MssqlAdmin
 from livetest.pgclient import PgAdmin
 from livetest.teradataadmin import TeradataAdmin
@@ -98,7 +99,11 @@ def known_test_ids() -> set:
     names = set()
     for path in _case_manifests():
         try:
-            names.add(load_manifest(path).name)
+            # Every manifest on disk is loaded for its name only; a set-only match: in an
+            # unselected case is not this caller's to report (doctor and collection do).
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", CardinalityWarning)
+                names.add(load_manifest(path).name)
         except Exception as e:
             # As manifests_for: skipped, never silently.
             _log(f"WARNING: skipped unloadable manifest {path}: {e}")

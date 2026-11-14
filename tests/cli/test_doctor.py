@@ -591,6 +591,20 @@ def test_a_case_outside_every_case_root_is_not_checked(project, tmp_path):
     assert c.message.startswith("not checked: outside every case root (")
 
 
+def test_a_set_only_match_loads_with_a_warning(tmp_path):
+    # A plain match: compares distinct sets, so a duplicated row passes it; the load warns and
+    # doctor shows the warning beside the ok line rather than leaving it in a pytest summary.
+    d = tmp_path / "setonly"
+    d.mkdir()
+    (d / "test.yaml").write_text("name: s\ntql: app.tql\nassert:\n  data:\n"
+                                 "    - {target: s.t, match: expected/rows.csv}\n")
+    checks = doctor.check_manifests([d / "test.yaml"])
+    assert [c.status for c in checks] == [doctor.OK_, doctor.WARN], [c.line() for c in checks]
+    assert checks[1].subject == "case setonly"
+    assert checks[1].message.startswith("assert.data[0] ")
+    assert "distinct" in checks[1].message and str(d) not in checks[1].message
+
+
 def test_case_manifest_checks_exact_and_lifecycle(tmp_path):
     d = tmp_path / "vacuous"
     d.mkdir()

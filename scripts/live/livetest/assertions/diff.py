@@ -32,6 +32,10 @@ def parse_diff_specs(raw: list) -> list[dict]:
             raise DiffSpecError(f"diff spec 'exact' must be a boolean: {spec!r}")
         if "fold_names" in spec and not isinstance(spec["fold_names"], bool):
             raise DiffSpecError(f"diff spec 'fold_names' must be a boolean: {spec!r}")
+        if "stable_seconds" in spec:
+            v = spec["stable_seconds"]
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
+                raise DiffSpecError(f"diff spec 'stable_seconds' must be a non-negative number: {spec!r}")
     return raw
 
 
@@ -196,6 +200,11 @@ def assert_diff(admins: dict, specs: list[dict], timeout: int, poll: float = 2.0
     zero = started if clock_start is None else clock_start
     deadline = started + timeout
     first = True
+    # stable_seconds (as in assert.file): after every target first equals its source, keep reading
+    # for the longest window in the group; a read that no longer equals fails the run. The window
+    # reads targets in full: a count that still matches proves nothing about a changed row.
+    stable_for = max((float(s.get("stable_seconds", 0)) for s in specs), default=0.0)
+    passed = passed_at = None   # (elapsed, upper) of the first passing poll, and when it passed
     # A source read inside a poll (the lazy read below) can take minutes. When it delays the last
     # spec's observation in the passing poll, or delayed the poll before it, the time is late by
     # up to that read: report it as an upper bound rather than as a measurement.
@@ -212,9 +221,42 @@ def assert_diff(admins: dict, specs: list[dict], timeout: int, poll: float = 2.0
             return _evaluate(admins, s, src[0], src[1], count_first=False)   # just counted
         return _evaluate(admins, s, src[0], src[1], count_first=count_first)
 
+    def failed_records(results):
+        return [
+            build_assertion_result(type="diff", status="passed" if ok else "failed", spec=s,
+                                    target=s["target"], db=db, detail="ok" if ok else d,
+                                    expected=exp, actual=act)
+            for s, (ok, d, exp, act) in zip(specs, results)
+        ]
+
     while True:
         if status_probe:
             status_probe()
+        if passed is not None:
+            results = [evaluate(s, src, count_first=False) for s, src in zip(specs, sources)]
+            # A target that could not be read (NotYetReadable) says nothing about a change.
+            unread = [r[3] is None for r in results]
+            if any(not r[0] and not u for r, u in zip(results, unread)):
+                detail = next(d for (ok, d, _, _), u in zip(results, unread) if not ok and not u)
+                raise AssertionFailed(
+                    f"diff passed, then failed within its stable_seconds window (a late row changed the"
+                    f" result): {detail}", failed_records(results))
+            now = time.monotonic()
+            if not any(unread) and now - passed_at >= stable_for:
+                elapsed, upper = passed
+                return [
+                    build_assertion_result(type="diff", status="passed", spec=s, target=s["target"], db=db,
+                                            detail="ok", expected=exp, actual=act, elapsed_s=elapsed,
+                                            elapsed_upper_bound=upper)
+                    for s, (ok, d, exp, act) in zip(specs, results)
+                ]
+            if any(unread) and now >= max(deadline, passed_at + stable_for):
+                detail = next(d for (ok, d, _, _) in results if not ok)
+                raise AssertionFailed(
+                    f"diff passed, but a target could not be read again before its stable_seconds"
+                    f" window closed: {detail}", failed_records(results))
+            time.sleep(poll or 0.05)
+            continue
         # The time reported is when the passing poll began reading its LAST spec: every target
         # was equal by then or during its own read, and a full read of millions of rows must not
         # count as writer time. Taken per spec, since earlier specs' reads can take minutes.
@@ -234,6 +276,10 @@ def assert_diff(admins: dict, specs: list[dict], timeout: int, poll: float = 2.0
             # quantisation. A failed poll is a count where `diff_counts_rows` allows it.
             elapsed = observed - zero
             upper = (first and clock_start is not None) or lazy_read_before_last or lazy_before
+            if stable_for > 0:
+                passed, passed_at = (elapsed, upper), time.monotonic()
+                time.sleep(min(poll or 0.05, stable_for))
+                continue
             return [
                 build_assertion_result(type="diff", status="passed", spec=s, target=s["target"], db=db,
                                         detail="ok", expected=exp, actual=act, elapsed_s=elapsed,
@@ -255,12 +301,7 @@ def assert_diff(admins: dict, specs: list[dict], timeout: int, poll: float = 2.0
                     return r
             results = [reread(r, s, src) for r, s, src in zip(results, specs, sources)]
             detail = next((d for ok, d, _, _ in results if not ok), detail)
-            records = [
-                build_assertion_result(type="diff", status="passed" if ok else "failed", spec=s,
-                                        target=s["target"], db=db, detail="ok" if ok else d,
-                                        expected=exp, actual=act)
-                for s, (ok, d, exp, act) in zip(specs, results)
-            ]
+            records = failed_records(results)
             raise AssertionFailed(f"diff not satisfied within {timeout}s: {detail}", records)
         if progress:
             try:

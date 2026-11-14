@@ -650,6 +650,9 @@ test measure nothing. `every` requires `times > 1`, and `times > 1` requires
 `expect_running: true` — otherwise cycles 2..N would "interrupt" an app cycle 1 left stopped and
 report success having done nothing. The loader rejects both rather than ignoring them.
 
+A set-only `match:` (no `rows:`, `events:`, `multiset: true`, `ordered: true` or `exact:`) is
+refused in a `recover:` case: a duplicate written on retry is exactly what a recovery test checks.
+
 **The phase does not judge.** It interrupts, restores, and gets out of the way; `assert.data` /
 `assert.diff` say what survived. A recovery test's interesting claim is almost always a
 comparison the existing vocabulary already expresses — source vs target, or two fan-out siblings
@@ -1944,11 +1947,22 @@ assert:
 Each spec needs `target` plus at least one of `min_rows` / `rows` / `match`; a spec without
 them, or with an unknown key, is refused at load. `match` compares
 *stringified* values; use `<null>` in the golden CSV for SQL/JSON null. By default it compares
-distinct sets; pin `rows: N` too if cardinality matters. A golden row's missing trailing cells
+distinct sets, so a row written twice passes; pin the count with `rows: N` (or `ordered: true`, or
+`exact:`). A `match:` with none of those loads with a warning, which `striim-test doctor` shows,
+and a `recover:` case refuses it. A golden row's missing trailing cells
 are NULL (prefer `<null>`); a row with more cells than the header is refused.
-On mssql and teradata, `rows` and `min_rows` count committed rows only; if the writer still holds
-the table lock at `timeout`, a `min_rows` spec passes on the uncommitted count, so it gives no
-committed-row guarantee where a writer may roll back or retry; use `rows:` for that.
+On mssql and teradata, `rows` and `min_rows` count committed rows only. If the writer still holds
+the table lock at `timeout`, the committed count is never read and the spec fails ("committed count
+never readable"), even when the uncommitted count would satisfy it.
+
+A spec passes at the first poll that satisfies it. `rows: 0` is therefore refused at load unless
+something proves the app got that far: a positive spec (`min_rows`, `rows: N` or `match`) on the
+same route, which is read in the same poll; a `lifecycle:` block; or `expect_halt: true`, whose
+data tiers run after the terminal halt. `stable_seconds: N` on a spec keeps polling for N seconds
+after every spec on its route first passes; a poll that no longer passes (a late row) fails the
+run, and a poll that cannot read the target counts neither way. The window runs past `timeout` if
+it must. On a `rows:` spec, `elapsed_s` is still the time of the first pass. A typed `exact:` spec
+refuses `stable_seconds`; use `lifecycle:` there.
 A Kafka count reads every offset up to the high watermark taken when the read starts (offsets
 that hold no message, such as transaction markers, count as read). It keeps polling while the
 topic does not exist or offsets are unread, and fails at `timeout`; a missing topic never counts
@@ -2006,7 +2020,13 @@ rows); with `exact: true` the source is also only counted until then. The time i
 generate, transaction step or server file; the end of a `recover:` or `action:` phase), to when
 the poll that passed began reading its last target. `elapsed_upper_bound: true` marks a time that
 is only an upper bound: the target was already equal at the first poll, or a source read inside
-the polls delayed the observation.
+the polls delayed the observation. Without `exact: true` the comparison is a distinct set, so a
+duplicated target row passes.
+
+`stable_seconds: N` keeps reading for N seconds after every target first equals its source; a read
+that no longer equals (a late or duplicated row) fails the run. These reads are full reads, not
+counts, and a read that raises "not readable yet" counts neither way. The reported `elapsed_s` is
+still the time of the first pass. A typed `exact:` diff refuses `stable_seconds`.
 
 For a typed Spanner diff, both endpoints name the table within the selected
 service database, and every non-text column is declared. This checks counted

@@ -120,6 +120,95 @@ def _deployment_groups(raw, path):
     return raw
 
 
+class CardinalityWarning(UserWarning):
+    """A `match:` compares distinct sets and nothing in its spec pins how many rows or events
+    there are, so a writer that duplicates on retry passes it. Raised at load (collection), and
+    shown by `striim-test doctor`."""
+
+
+#: The keys that make a `match:` count what it compares, per tier (`exact:` is the typed compare).
+_CARDINALITY_PINS = {"data": "rows: N, ordered: true or exact:",
+                     "file": "events: N, multiset: true or exact:"}
+
+
+def _match_is_counted(kind: str, spec: dict) -> bool:
+    if "exact" in spec:     # data and file `exact:` is always the typed, counted compare
+        return True
+    if kind == "data":
+        return "rows" in spec or spec.get("ordered") is True
+    return "events" in spec or spec.get("multiset") is True
+
+
+def _data_route(spec: dict) -> str:
+    # The route plugin._spec_route gives a data spec: one assert_data call runs per route, so only
+    # specs on the same route are read in the same poll.
+    return spec.get("source_db") or spec.get("target_db") or spec.get("db") or "postgres-source"
+
+
+def _int_or_none(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None     # refused by parse_data_specs when the tier runs
+
+
+def _check_counted_specs(raw: dict, assert_, path, recover, expect_halt: bool) -> None:
+    """Load-time rules for data/file/diff specs whose compare cannot see a duplicate or a late row.
+
+    * A `match:` with no cardinality pin compares distinct sets: warned, and refused under
+      `recover:`, whose point is what an interruption and retry left behind.
+    * `rows: 0` passes at the first poll that reads the target empty, which is also what an app
+      that has not written yet looks like. It is refused unless something proves the app got that
+      far: a positive spec on the same route (read in the same poll; a typed `exact:` spec runs to
+      completion before it), a `lifecycle:` block, or `expect_halt: true` (the data tiers run
+      after the terminal halt).
+    * `stable_seconds` on a typed `exact:` data or diff spec would be ignored by the typed path.
+    """
+    if not isinstance(assert_, dict):
+        return
+    block = raw.get("exact")
+    for kind in ("data", "file"):
+        specs = assert_.get(kind)
+        for i, spec in enumerate(specs if isinstance(specs, list) else []):
+            if (not isinstance(spec, dict) or "match" not in spec or "nothing" in spec
+                    or "raw" in spec or _match_is_counted(kind, spec)):
+                continue
+            why = (f"assert.{kind}[{i}] 'match:' compares distinct sets, so a row written twice passes"
+                   f" it; pin the count with {_CARDINALITY_PINS[kind]}")
+            if recover:
+                raise ManifestError(
+                    f"{path}: {why} -- a 'recover:' case must, since what a retry duplicated is what"
+                    f" it tests")
+            warnings.warn(f"{path}: {why}", CardinalityWarning, stacklevel=3)
+    for kind in ("data", "diff"):
+        specs = assert_.get(kind)
+        for i, spec in enumerate(specs if isinstance(specs, list) else []):
+            if not isinstance(spec, dict) or "stable_seconds" not in spec or "exact" not in spec:
+                continue
+            legacy = kind == "diff" and isinstance(spec["exact"], bool) and (block is None or not spec["exact"])
+            if not legacy:
+                raise ManifestError(
+                    f"{path}: assert.{kind}[{i}] 'stable_seconds' is not supported with a typed 'exact:'"
+                    f" spec, which would ignore it; use 'lifecycle:' to prove completion")
+    if raw.get("lifecycle") is not None or expect_halt:
+        return
+    data = [(i, s) for i, s in enumerate(assert_.get("data") or [])
+            if isinstance(s, dict) and "nothing" not in s]
+    for i, spec in data:
+        if "rows" not in spec or _int_or_none(spec["rows"]) != 0:
+            continue
+        route = _data_route(spec)
+        if any(j != i and _data_route(t) == route and (
+                "match" in t or "min_rows" in t or (_int_or_none(t.get("rows")) or 0) > 0)
+               for j, t in data):
+            continue
+        raise ManifestError(
+            f"{path}: assert.data[{i}] 'rows: 0' passes at the first poll that reads "
+            f"{spec.get('target')!r} empty, which is also what an app that has not written yet looks"
+            f" like -- add a positive spec (min_rows, rows: N or match) on the same route ({route}),"
+            f" a 'lifecycle:' block, or 'expect_halt: true' if the app is meant to halt")
+
+
 class ManifestError(Exception):
     pass
 
@@ -1351,6 +1440,7 @@ def load_manifest(path: Path) -> TestManifest:
         raise ManifestError(
             f"{path}: 'recover' requires an assertion beyond 'smoke' -- the point of the "
             f"phase is what survived the interruption, and smoke only re-checks RUNNING")
+    _check_counted_specs(raw, assert_, path, recover, expect_halt)
 
     # Option C: `example:` points at the shipped OP example dir (repo-relative). When
     # set, tql/ddl/seed/upload files are read from THERE (the certified shipped files);

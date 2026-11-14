@@ -52,6 +52,7 @@ import difflib
 import re
 import socket
 import subprocess
+import warnings
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -965,6 +966,7 @@ def check_manifests(files: list, tier_of=None) -> list:
     loaders for those tiers), so a typo
     fails here and not at run time. Without ``tier_of`` every case is live. A case outside every
     case root is not checked: ``run`` refuses it anyway, naming the roots."""
+    from livetest.manifest import CardinalityWarning
     loaders = _loaders()
     checks = []
     for f in files:
@@ -978,13 +980,19 @@ def check_manifests(files: list, tier_of=None) -> list:
             continue
         load, error, how = loaders[tier]
         try:
-            m = load(f)
+            with warnings.catch_warnings(record=True) as seen:
+                warnings.simplefilter("always", CardinalityWarning)
+                m = load(f)
         except error as e:
             checks.append(_fail(subject, str(e)))
         except (OSError, ValueError, TypeError, AttributeError, KeyError) as e:
             checks.append(_fail(subject, f"{f}: {type(e).__name__}: {e}"))
         else:
             checks.append(_ok(subject, f"test.yaml loads{how} ({getattr(m, 'name', None) or f.parent.name})"))
+            # A set-only match: loads, but it cannot see a duplicated row (CardinalityWarning).
+            for w in seen:
+                if issubclass(w.category, CardinalityWarning):
+                    checks.append(_warn(subject, str(w.message).removeprefix(f"{f}: ")))
     return checks
 
 
