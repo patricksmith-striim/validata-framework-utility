@@ -58,6 +58,49 @@ def test_unset_striim_home_with_no_platform_jar_is_a_skip(run_case):
     assert _exit(run)[0] == (3, "selected-item-skipped") and "mvn" not in run.names()
 
 
+def _with_op_twin(root, name):
+    """A second case beside ``legacy`` that loads an OP module; ``legacy`` itself loads none."""
+    twin = root / "cases" / "legacy-op"
+    shutil.copytree(root / "cases" / "legacy", twin)
+    manifest = twin / "test.yaml"
+    manifest.write_text(OP(manifest.read_text()).replace(f"name: {name}\n", f"name: {name}-op\n"))
+
+
+def test_a_module_that_could_not_be_built_fails_the_run_beside_a_passing_case(run_case):
+    # The skipped case is never tested, so the case that passed cannot vouch for the run.
+    run = run_case("legacy", {"op_build": "missing"}, prepare=_with_op_twin)
+    run.result.assert_outcomes(passed=1, skipped=1)
+    assert run.ret == 1, run.text
+    assert "could not be built" in run.text and "lc-legacy-op" in run.text
+
+
+def test_a_missing_service_jar_skips_with_a_cause_and_an_all_skipped_run_fails(run_case):
+    run = run_case("legacy", {"service_jar_missing": "no JDBC driver jar in deps/"})
+    status, _, xml = run.junit()
+    assert status == "skipped" and "service postgres unavailable: no JDBC driver jar" in xml, run.text
+    assert run.ret == 1, run.text
+    assert "PROVED NOTHING" in run.text and "deploy" not in run.names()
+
+
+def test_a_service_that_cannot_be_prepared_skips_with_a_cause_and_an_all_skipped_run_fails(run_case):
+    run = run_case("legacy", {"service_unavailable": "set SLT_PG_DATA_DIR"})
+    status, _, xml = run.junit()
+    assert status == "skipped" and "service postgres unavailable: set SLT_PG_DATA_DIR" in xml, run.text
+    assert run.ret == 1, run.text
+
+
+def test_a_missing_service_jar_beside_a_passing_case_keeps_the_run_green(run_case):
+    # Absent infrastructure in a partial run is an ordinary skip, as for Docker: only a run in
+    # which nothing executed fails.
+    def twin(root, name):
+        _with_op_twin(root, name)
+        manifest = root / "cases" / "legacy-op" / "test.yaml"
+        manifest.write_text(manifest.read_text().replace("requires: [postgres]", "requires: [mysql]"))
+    run = run_case("legacy", {"op_stub": True, "service_jar_missing": {"mysql": "no JDBC driver jar"}}, prepare=twin)
+    run.result.assert_outcomes(passed=1, skipped=1)
+    assert run.ret == 0, run.text
+
+
 def test_no_supported_assertion_ran_fails(run_case):
     run = run_case("legacy", edit=lambda y: y.replace("smoke: true", "smoke: false"))
     status, _, xml = run.junit()

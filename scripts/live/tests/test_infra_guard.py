@@ -192,9 +192,10 @@ def test_sessionfinish_actually_assigns_the_exit_status(monkeypatch):
 def test_runtest_marks_exactly_the_three_blocked_paths():
     import inspect
     src = inspect.getsource(plugin.LiveItem._runtest)
-    assert src.count("self._slt_infra_skip =") == 3, (
-        "three sites mean 'we could not test this': cluster unreachable, Docker absent, the OP "
-        "jar could not be built. A fourth needs a deliberate decision, not a silent addition."
+    assert src.count("self._slt_infra_skip =") == 5, (
+        "five sites mean 'we could not test this': cluster unreachable, Docker absent, the OP "
+        "jar could not be built, and a required service unavailable (its prerequisites, or its "
+        "driver jar). A sixth needs a deliberate decision, not a silent addition."
     )
 
 
@@ -210,20 +211,24 @@ def test_each_cause_is_bound_to_the_skip_it_guards():
         '"cluster"': "_slt_striim_reason",
         '"docker"': "unavailable (no Docker)",
         '"build"': "{m.name}: {e}",
+        '"service"': "unavailable: {_why}",
     }
-    seen = set()
+    seen = []
     for i, line in enumerate(lines):
         if "self._slt_infra_skip =" not in line:
             continue
         cause = next((c for c in expected if c in line), None)
         assert cause, "unknown cause on line %d: %s" % (i, line.strip())
-        seen.add(cause)
+        seen.append(cause)
         window = " ".join(lines[i + 1:i + 3])
+        if cause == '"service"' and window.strip().startswith("raise") \
+                and "except pytest.skip.Exception" in lines[i - 1]:
+            continue                       # _prepare_service's own skip, re-raised once marked
         assert "pytest.skip(" in window, (
             "line %d marks the item but does not skip immediately: %s" % (i, line.strip()))
         assert expected[cause] in window, (
             "%s is not on the skip it is supposed to describe; got: %s" % (cause, window.strip()))
-    assert seen == set(expected)
+    assert sorted(seen) == sorted(['"cluster"', '"docker"', '"build"', '"service"', '"service"'])
 
 
 def test_a_build_failure_does_not_offer_the_no_cluster_escape(monkeypatch, capsys):
@@ -281,3 +286,70 @@ def test_a_docker_only_run_does_not_blame_the_cluster(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "Docker was unavailable" in out
     assert "without a cluster" not in out          # the cluster was fine
+
+
+# ------------------------------------------- a module that was not built, a service that is absent
+# A build skip is not absent infrastructure: the module under test (or its prerequisite) is broken,
+# the cases that load it were never tested, and the cases that did run cannot vouch for them. So
+# it fails the run whatever else ran. A service that is unavailable here is absent infrastructure,
+# like Docker: it carries a cause, and the all-skipped rule applies to it.
+
+def test_a_build_skip_fails_the_run_even_when_other_cases_ran(monkeypatch):
+    monkeypatch.delenv("SLT_ALLOW_NO_CLUSTER", raising=False)
+    build = [_blocked(f"regression/op/m{i}/test.yaml::m{i}", "Op: cannot run mvn", cause="build")
+             for i in range(3)]
+    s = _Session({"passed": [_Rep(LIVE)], "skipped": build})
+    assert _slt_infra_guard(s, 0) == 1
+
+
+def test_a_build_skip_beside_a_failed_case_keeps_the_failure(monkeypatch):
+    monkeypatch.delenv("SLT_ALLOW_NO_CLUSTER", raising=False)
+    s = _Session({"failed": [_Rep(LIVE)], "skipped": [_blocked(LIVE2, "Op: x", cause="build")]})
+    assert _slt_infra_guard(s, 1) == 1
+
+
+def test_a_partial_run_with_a_build_skip_names_the_case_and_does_not_say_nothing_ran(monkeypatch, capsys):
+    monkeypatch.delenv("SLT_ALLOW_NO_CLUSTER", raising=False)
+    s = _Session({"passed": [_Rep(LIVE)],
+                  "skipped": [_blocked(LIVE2, "YOp: cannot run mvn to build YOp", cause="build")]})
+    assert _slt_infra_guard(s, 0) == 1
+    out = capsys.readouterr().out
+    assert LIVE2 in out and "cannot run mvn to build YOp" in out and "could not be built" in out
+    assert "none executed" not in out and "SLT_ALLOW_NO_CLUSTER" not in out
+
+
+def test_the_opt_out_does_not_cover_a_build_skip_in_a_partial_run(monkeypatch):
+    monkeypatch.setenv("SLT_ALLOW_NO_CLUSTER", "1")
+    s = _Session({"passed": [_Rep(LIVE)], "skipped": [_blocked(LIVE2, "Op: x", cause="build")]})
+    assert _slt_infra_guard(s, 0) == 1
+
+
+def test_all_live_skipped_for_an_unavailable_service_fails_the_run(monkeypatch):
+    monkeypatch.delenv("SLT_ALLOW_NO_CLUSTER", raising=False)
+    s = _Session({"skipped": [_blocked(reason="service teradata unavailable: no driver jar", cause="service"),
+                              _blocked(LIVE2, reason="service teradata unavailable: no driver jar",
+                                       cause="service")]})
+    assert _slt_infra_guard(s, 0) == 1
+
+
+def test_a_partial_run_with_an_unavailable_service_keeps_its_exit_status(monkeypatch):
+    monkeypatch.delenv("SLT_ALLOW_NO_CLUSTER", raising=False)
+    s = _Session({"passed": [_Rep(LIVE)],
+                  "skipped": [_blocked(LIVE2, "service teradata unavailable: x", cause="service")]})
+    assert _slt_infra_guard(s, 0) == 0
+
+
+def test_the_opt_out_covers_an_unavailable_service(monkeypatch):
+    monkeypatch.setenv("SLT_ALLOW_NO_CLUSTER", "1")
+    s = _Session({"skipped": [_blocked(reason="service teradata unavailable: x", cause="service")]})
+    assert _slt_infra_guard(s, 0) == 0
+
+
+def test_a_service_only_run_blames_the_service_not_docker_or_the_cluster(monkeypatch, capsys):
+    monkeypatch.delenv("SLT_ALLOW_NO_CLUSTER", raising=False)
+    s = _Session({"skipped": [_blocked(reason="service teradata unavailable: no driver jar", cause="service")]})
+    assert _slt_infra_guard(s, 0) == 1
+    out = capsys.readouterr().out
+    assert "service teradata unavailable: no driver jar" in out
+    assert "A service this run requires was unavailable" in out and "SLT_ALLOW_NO_CLUSTER=1" in out
+    assert "Docker was unavailable" not in out and "without a cluster" not in out

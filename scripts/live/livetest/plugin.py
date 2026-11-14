@@ -516,14 +516,18 @@ def _slt_infra_guard(session, exitstatus):
     makes every green claim ever sourced from this tier unfalsifiable, because nobody can tell
     afterwards which runs executed anything.
 
-    Fires only when BOTH hold: at least one live item was skipped for an infrastructure reason
-    (``LiveItem.runtest`` sets ``_slt_infra_skip`` at the three sites that mean "we could not
-    test this"), and **no live item executed**. A partial run keeps its exit status -- that is an
-    ordinary skip, and failing it would train people to ignore this, which is how a guard stops
-    working. Per-case skips (``disabled:``, an opt-in service gate, a topology mismatch) are not
+    Fires when at least one live item was skipped for a marked reason (``LiveItem.runtest`` sets
+    ``_slt_infra_skip`` at the sites that mean "we could not test this": ``cluster``, ``docker``,
+    ``service``, ``build``) and either **no live item executed**, or one of the skips is a
+    ``build`` skip. A partial run with only absent infrastructure keeps its exit status -- that is
+    an ordinary skip, and failing it would train people to ignore this, which is how a guard stops
+    working. A module that could not be built is different: the cases that load it were never
+    tested, and the cases that did run cannot vouch for them, so it fails the run whatever else
+    ran. Per-case skips (``disabled:``, an opt-in service gate, a topology mismatch) are not
     marked and never fire it.
 
-    ``SLT_ALLOW_NO_CLUSTER=1`` opts out, for deliberately probing without a stack.
+    ``SLT_ALLOW_NO_CLUSTER=1`` opts out for absent infrastructure, for deliberately probing
+    without a stack; never for a build skip.
     """
     tr = session.config.pluginmanager.get_plugin("terminalreporter")
     if tr is None:                       # no reporter at all (-p no:terminal, an embedding host)
@@ -549,7 +553,15 @@ def _slt_infra_guard(session, exitstatus):
     # "error" as well as "failed": an item that dies in setup or teardown lands there, and it
     # still executed.
     if _live("passed") or _live("failed") or _live("error"):
-        return exitstatus
+        unbuilt = [r for r in blocked if getattr(r, "_slt_infra_skip", "") == "build"]
+        if not unbuilt:
+            return exitstatus
+        print("")
+        print("[slt] %d live case(s) were skipped because a module they load could not be built; "
+              "they were never tested, so the run FAILS." % len(unbuilt))
+        for r in unbuilt:
+            print("[slt]   %s: %s" % (getattr(r, "nodeid", "?"), _slt_skip_reason(r)))
+        return 1 if exitstatus == 0 else exitstatus
 
     first = blocked[0]
     print("")
@@ -566,6 +578,9 @@ def _slt_infra_guard(session, exitstatus):
     if not causes & {"build"}:
         if "cluster" in causes:
             print("[slt] Set SLT_ALLOW_NO_CLUSTER=1 if you meant to run without a cluster.")
+        elif causes == {"service"}:
+            print("[slt] A service this run requires was unavailable here; "
+                  "SLT_ALLOW_NO_CLUSTER=1 opts out of this check.")
         else:
             print("[slt] Docker was unavailable; SLT_ALLOW_NO_CLUSTER=1 opts out of this check.")
     return 1 if exitstatus == 0 else exitstatus
@@ -1648,8 +1663,9 @@ def build_modules(m: TestManifest, release: dict, report=None) -> list:
     """Build every op:/udf: module's jar (opartifacts.build_jar) against `release`.
     Returns [(module_dict, BuiltArtifact), ...] in module order (see
     manifest._normalize_modules — op: entries first, then udf: entries). Raises
-    opartifacts.OpBuildFailed on a build failure (the caller fails the case) and
-    OpArtifactError on a missing prerequisite (the caller skips); kept as a caller-side
+    opartifacts.OpBuildFailed on a build failure and OpJarRejected on an unusable prebuilt jar
+    (the caller fails the case), and OpArtifactError on a missing prerequisite (the caller
+    skips, and the infra guard fails the run); kept as a caller-side
     try/except, not swallowed here, so an upload failure below is NOT accidentally skipped too.
 
     `report` (optional, a `(label, phase)` progress reporter like the run-level `_report`)
@@ -2442,10 +2458,14 @@ class LiveItem(pytest.Item):
                     _prepare_service(defn, os.environ, ctx.mode)
                 except _prestart.PreUpError as e:
                     pytest.fail(f"service {svc}: {e}", pytrace=False)
+                except pytest.skip.Exception:
+                    self._slt_infra_skip = "service"   # a prerequisite of the service is missing here
+                    raise
                 _why = _sp.missing_service_jar(svc, ctx.mode)
                 if _why:
                     if getattr(defn, "unavailable_policy", "skip") == "fail":
                         pytest.fail(f"service {svc} unavailable: {_why}", pytrace=False)
+                    self._slt_infra_skip = "service"
                     pytest.skip(f"service {svc} unavailable: {_why}")
                 try:
                     resolved = _slt_infra.resolve_service(  # shared-service adapter
@@ -2795,7 +2815,7 @@ class LiveItem(pytest.Item):
                 except opartifacts.OpArtifactError as e:
                     # A missing build prerequisite (JDK, mvn, STRIIM_HOME). "build", not an
                     # infrastructure fault: the banner must not blame the cluster or offer
-                    # SLT_ALLOW_NO_CLUSTER.
+                    # SLT_ALLOW_NO_CLUSTER, and the guard fails the run whatever else ran.
                     self._slt_infra_skip = "build"
                     pytest.skip(f"{m.name}: {e}")
                 preloaded = bool(os.environ.get("SLT_OPS_PRELOADED"))
@@ -4510,7 +4530,7 @@ def pytest_runtest_makereport(item, call):
         # literal and its own strip, and three separate review rounds each found the marker
         # leaking into one more of them. A flag that is not a string cannot leak.
         rep._slt_live = True
-        # "" when the item was not blocked; otherwise the CAUSE ("cluster"/"docker"/"build").
+        # "" when the item was not blocked; otherwise the CAUSE ("cluster"/"docker"/"service"/"build").
         rep._slt_infra_skip = getattr(item, "_slt_infra_skip", "")
         _slt_collect_report(item.config, item, rep)
         _slt_evidence.finalize_from_report(item, rep)   # C7.4: one envelope per outcome

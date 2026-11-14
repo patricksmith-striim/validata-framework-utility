@@ -120,20 +120,23 @@ that file on each release of the series.
 
 The first one set wins, in that order. Set them in the shell; `.env` does not hold them.
 
+A jar you name and the run cannot use, for any reason below, fails a live case: you asked for that
+jar, so the case cannot pass without it. An integration case skips instead.
+
 - **A folder**, which any of the three may name, must hold exactly one jar for the module named
   `<module>[V<version>]-<series>.jar` (for example `ReferenceOpV1-5.4.jar`) or named for the
   release's suffix selected above (`ReferenceOpV1-5.4.2.jar`), in it or below it. No match, or
-  more than one (a release-named jar beside a series-named one included), is an error and the case
-  does not run; another module's jar is never used.
+  more than one (a release-named jar beside a series-named one included), is an error; another
+  module's jar is never used.
 - **A named file** must end in `-<series>.jar` or the release's selected suffix (for example
-  `ReferenceOpV1-5.4.jar` or `ReferenceOpV1-5.4.2.jar`); otherwise the case does not run.
+  `ReferenceOpV1-5.4.jar` or `ReferenceOpV1-5.4.2.jar`).
 - **A shared named file** selected by `SLT_PREBUILT_JAR` is refused if its `Striim-Module-Name`
   manifest entry names another module. The entry must match the module folder's name, optionally
   followed by `V<version>`, ignoring case. A jar without the entry (every UDF jar) must instead be
   named for the module, as in a folder. These checks do not apply to `SLT_PREBUILT_JAR_<MODULE>` or
   `SLT_PREBUILT_DIR`; folder lookup already selects only this module's jar.
 - **Before using it**, the run checks that the file is a readable jar and that its classes target
-  the release's Java level (17 for Striim 5.4, 11 for 5.0 and 5.2). If not, the case does not run.
+  the release's Java level (17 for Striim 5.4, 11 for 5.0 and 5.2).
 - **The run reports** the file and its SHA-256 (`using prebuilt jar …`) and loads those exact
   bytes; an Open Processor's upload name carries a tag of that digest.
 

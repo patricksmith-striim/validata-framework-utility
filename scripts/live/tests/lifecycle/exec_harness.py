@@ -561,6 +561,12 @@ elif SC.get("op_build"):                                   # the module build fa
     def _failing_build(m, release, report=None):
         raise _build_error(_build_message)
     P.build_modules = _failing_build
+if SC.get("service_unavailable"):                          # a service's prerequisites are missing here
+    P._prestart.prepare_selected = lambda defn, env, mode="docker", **kw: SC["service_unavailable"]
+if SC.get("service_jar_missing"):                          # a service's driver jar is missing here
+    _jar_missing = SC["service_jar_missing"]               # one reason for every service, or {service: reason}
+    P._sp.missing_service_jar = lambda service, mode, run=None: (
+        _jar_missing.get(service) if isinstance(_jar_missing, dict) else _jar_missing)
 if SC.get("op_poison"):
     P._node_log_tail = lambda ctx: "java.util.zip.ZipException: invalid LOC header (bad signature)"
     P._node_log_since = lambda ctx, marks, run=None: "java.util.zip.ZipException: invalid LOC header (bad signature)"

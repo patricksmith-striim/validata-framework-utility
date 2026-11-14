@@ -41,6 +41,13 @@ with exit status 0. `striim-test run` treats a selection where nothing executed 
 3), and so does the live tier unless `SLT_ALLOW_NO_CLUSTER=1` is set. With direct pytest, read the
 executed count from the JUnit XML, not the exit code.
 
+The live tier also fails a run in which any case skipped because a module it loads could not be
+built (no `mvn`, no JDK for the release, no `STRIIM_HOME`), even when other cases passed: those
+cases were never tested. `SLT_ALLOW_NO_CLUSTER=1` does not cover that skip. A required service that
+is unavailable here (a missing prerequisite or driver jar) counts as missing infrastructure, like
+Docker. A live case fails rather than skips when the jar the run builds is still stamped for
+another release or Java level, or when a jar named by `SLT_PREBUILT_*` cannot be used.
+
 A container that is up is not a server that is up: a Striim node can shut itself down (its log ends
 `Striim Server Beginning Shutdown`) while `docker ps` still shows the container running. When a run
 skips everything:
