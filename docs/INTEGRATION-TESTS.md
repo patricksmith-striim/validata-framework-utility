@@ -140,7 +140,13 @@ connection-only `teradata`/`servicenow`; see [SERVICES.md](SERVICES.md)), `ddl:`
 `target:` (drive it as a Striim Target — see below),
 `timeout:` (seconds, default 120), `disabled:` (truthy => skip, use a
 string reason). `assert.smoke: true` substitutes for `assert.data` when the case only proves the
-operator constructs and runs.
+operator constructs and runs. `matrix:` and `variants:` are described below.
+
+**Any other top-level key is refused at load** as an unknown top-level key, naming it and listing
+the keys allowed, and `striim-test doctor --case` reports it. A misspelt `matrix:`, `requires:`,
+`timeout:` or `disabled:` is an error, not a case that runs once, without its services, with the
+default timeout or while meant to be disabled. A perf case follows the same rule, with
+`performance:` in place of `assert:`.
 
 **`assert.data` is exact and type-strict.** `true` is not `1`, `5.0` is not `5`, and decimals are
 compared digit for digit, never through a float.

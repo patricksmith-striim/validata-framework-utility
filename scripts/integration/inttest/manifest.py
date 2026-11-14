@@ -50,6 +50,14 @@ DEFAULT_DB_ROUTE = "postgres-source"
 DEFAULT_TARGET_DB_ROUTE = "postgres-target"
 DEFAULT_TIMEOUT = 120
 
+#: Every top-level key load_manifest reads besides `assert:`. Any other key is refused at load:
+#: a misspelt `matrix:` would otherwise run the case once and report it as covering the
+#: permutations. inttest.perfmanifest shares the set, with `performance:` in place of `assert:`.
+_TEST_MANIFEST_KEYS = frozenset({
+    "name", "op", "udf", "properties", "password_properties", "purpose", "requires", "ddl",
+    "seed", "timeout", "disabled", "types", "source", "target", "variants", "matrix",
+})
+
 #: `seed:` runs before the reader is driven (the default) or after its source has started.
 SEED_WHEN_VALUES = ("pre_start", "post_start")
 DEFAULT_SEED_WHEN = "pre_start"
@@ -1887,6 +1895,11 @@ def load_manifest(path) -> TestManifest:
         raise ManifestError(f"{path}: manifest is empty")
     if not isinstance(raw, dict):
         raise ManifestError(f"{path}: top level must be a mapping, got {type(raw).__name__}")
+    allowed = _TEST_MANIFEST_KEYS | {"assert"}
+    unknown = sorted(str(k) for k in raw if k not in allowed)
+    if unknown:
+        raise ManifestError(
+            f"{path}: unknown top-level key(s) {unknown} -- allowed: {sorted(allowed)}")
 
     name = raw.get("name")
     if not isinstance(name, str) or not name:

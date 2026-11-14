@@ -521,6 +521,20 @@ def test_case_manifest_with_a_broken_assert_spec_fails(tmp_path):
         assert "assert.data[0]" in c.message and why in c.message
 
 
+def test_an_integration_case_with_a_misspelt_top_level_key_fails(tmp_path):
+    # A misspelt `matrix:` used to load, and the case ran once for permutations that never ran.
+    d = tmp_path / "int-typo"
+    d.mkdir()
+    for f in ("in.json", "out.json"):
+        (d / f).write_text("[]")
+    (d / "test.yaml").write_text("name: int-typo\nop: {jar: java/OpenProcessors/X}\n"
+                                 "matrx: {A: ['1', '2']}\n"
+                                 "assert:\n  data: [{input: in.json, match: out.json}]\n")
+    c = one_fail(doctor.check_manifests([d / "test.yaml"], lambda f: "integration"))
+    assert c.subject == "case int-typo" and c.code == CONFIG
+    assert "unknown top-level key(s) ['matrx']" in c.message
+
+
 def test_case_manifest_with_an_incomplete_typed_or_nothing_spec_fails(tmp_path):
     # A typed exact spec with no target, and a json spec whose typo hid behind nothing:, used to
     # report "test.yaml loads".

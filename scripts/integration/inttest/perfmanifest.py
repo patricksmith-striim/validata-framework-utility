@@ -37,26 +37,24 @@ import yaml
 from . import manifest as manifest_mod
 
 # Every key inttest.manifest.load_manifest accepts EXCEPT `assert:` (replaced by
-# `performance:`, added separately below).
-_TEST_MANIFEST_KEYS = {
-    "name", "op", "properties", "purpose", "requires", "ddl", "seed", "timeout",
-    "disabled", "types", "password_properties", "udf", "source", "target",
-    # §85.1's first axis: the perf tier ran on PostgreSQL alone, so it could not rank a
-    # change whose cost is engine-specific -- MERGE against ON CONFLICT, range locks
-    # against row locks, bulk-copy eligibility. Same key, same normalizer and same refusals
-    # as the regression tier, so a `variants:` block means one thing in both.
-    "variants",
-    # The PROPERTY axis, and `_normalize_matrix`'s own docstring is what sends it here:
-    # "What may legitimately differ between permutations is PERFORMANCE, which this tier
-    # does not measure and must not start to ... That is T3's."
-    #
-    # ⚠ IT MEANS THE OPPOSITE OF WHAT IT MEANS IN REGRESSION, and that is the whole reason
-    # it belongs here. There, N permutations share ONE `assert:` -- the claim is that the
-    # knobs are NOT observable. Here each permutation is its own measurement, and the claim
-    # is that they ARE observable: the difference between two numbers one property apart is
-    # the deliverable (§69.3). Composed with `variants:` by TestManifest.runs().
-    "matrix",
-}
+# `performance:`, added separately below): the regression loader's own set, so the two tiers
+# accept the same keys. Two of them mean something particular here:
+#
+# `variants` is §85.1's first axis: the perf tier ran on PostgreSQL alone, so it could not rank a
+# change whose cost is engine-specific -- MERGE against ON CONFLICT, range locks
+# against row locks, bulk-copy eligibility. Same key, same normalizer and same refusals
+# as the regression tier, so a `variants:` block means one thing in both.
+#
+# `matrix` is the PROPERTY axis, and `_normalize_matrix`'s own docstring is what sends it here:
+# "What may legitimately differ between permutations is PERFORMANCE, which this tier
+# does not measure and must not start to ... That is T3's."
+#
+# ⚠ IT MEANS THE OPPOSITE OF WHAT IT MEANS IN REGRESSION, and that is the whole reason
+# it belongs here. There, N permutations share ONE `assert:` -- the claim is that the
+# knobs are NOT observable. Here each permutation is its own measurement, and the claim
+# is that they ARE observable: the difference between two numbers one property apart is
+# the deliverable (§69.3). Composed with `variants:` by TestManifest.runs().
+_TEST_MANIFEST_KEYS = manifest_mod._TEST_MANIFEST_KEYS
 
 _CORRECTNESS_MODES = {"full", "sampled", "disabled"}
 # -Xms/-Xmx always carry their value concatenated (e.g. -Xmx4g), never as a separate
