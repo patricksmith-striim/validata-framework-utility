@@ -1573,7 +1573,9 @@ def teardown_file_outputs(file_spec, tokens: dict, clear) -> None:
             pass
 
 def teardown_unowned(admins: dict, ddl_files: list, tokens: dict, gcs_cleanup: list, kafka_cleanup: list,
-                     file_spec, clear_files, upload_names: list, delete_uploads, *, oracle_observer_failed=False) -> dict:
+                     file_spec, clear_files, upload_names: list, delete_uploads, *, oracle_observer_failed=False,
+                     op_s: float = _slt_ownership.CLEANUP_OP_S,
+                     deadline_s: float = _slt_ownership.CLEANUP_DEADLINE_S) -> dict:
     """The best-effort teardown of a case without a `lifecycle:` block, after the ledger cleanup.
 
     The ownership ledger deletes Postgres objects, the namespace, slots and exact file claims; the
@@ -1582,15 +1584,30 @@ def teardown_unowned(admins: dict, ddl_files: list, tokens: dict, gcs_cleanup: l
     GCS buckets and Kafka topics (incl. `kafka_cleanup_topics:`), the per-test op.upload files and
     the rolled FileWriter parts (<path>*). Never raises; returns what it attempted and what failed,
     as {"attempted": ["<kind> <name>", ...], "failed": {"<kind> <name>": "<error>"}}, the subjects
-    the ledger's verification gaps use (kind: engine-tables, bucket, topic, upload, file-output)."""
+    the ledger's verification gaps use (kind: engine-tables, bucket, topic, upload, file-output).
+
+    It runs after the ledger's cleanup and outside its deadline, so it carries the ledger's bounds itself:
+    each call gets ``op_s`` (``CLEANUP_OP_S``) and the whole teardown ``deadline_s``
+    (``CLEANUP_DEADLINE_S``). A call that outlives its bound is abandoned in a daemon thread and recorded
+    as failed; once the deadline has passed, the calls left are recorded as not attempted."""
     out = {"attempted": [], "failed": {}}
+    deadline = _slt_lifecycle.Deadline(deadline_s)
+
+    def call(subjects, fn, *args):
+        out["attempted"] += subjects
+        if deadline.expired():
+            out["failed"].update({s: "cleanup-deadline: not attempted" for s in subjects})
+            return
+        bound = max(0.05, min(op_s, deadline.remaining()))
+        try:
+            _slt_lifecycle.bounded(lambda: fn(*args), bound)
+        except _slt_lifecycle.ProbeHung:
+            out["failed"].update({s: f"did not finish within {bound:.1f}s and was abandoned" for s in subjects})
+        except Exception as e:          # noqa: BLE001 - best-effort; recorded, never raised
+            out["failed"].update({s: repr(e) for s in subjects})
 
     def attempt(subject, fn, *args):
-        out["attempted"].append(subject)
-        try:
-            fn(*args)
-        except Exception as e:          # noqa: BLE001 - best-effort; recorded, never raised
-            out["failed"][subject] = repr(e)
+        call([subject], fn, *args)
 
     seen = set()
     for db, _f in ddl_files:
@@ -1612,13 +1629,8 @@ def teardown_unowned(admins: dict, ddl_files: list, tokens: dict, gcs_cleanup: l
         attempt(f"bucket {bucket}", admin.delete_bucket, bucket)
     for admin, topic in kafka_cleanup:
         attempt(f"topic {topic}", admin.delete_topic, topic)
-    if upload_names:
-        subjects = [f"upload {n}" for n in upload_names]
-        out["attempted"] += subjects
-        try:
-            delete_uploads(upload_names)
-        except Exception as e:          # noqa: BLE001 - one call deletes them all; each is recorded
-            out["failed"].update({s: repr(e) for s in subjects})
+    if upload_names:                    # one call deletes them all; each is recorded
+        call([f"upload {n}" for n in upload_names], delete_uploads, upload_names)
     if file_spec:
         try:
             specs = parse_file_specs(file_spec)

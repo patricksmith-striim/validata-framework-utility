@@ -31,7 +31,8 @@ from livetest import lockdir
 
 # Compose project names must match [a-z0-9][a-z0-9_-]*; keep the prefix to the dashed subset so
 # one rule is valid everywhere (project names, container names, filenames).
-_PREFIX_RE = re.compile(r"^[a-z0-9][a-z0-9-]*$")
+# \Z, not $: $ also matches before a final "\n", so "alt\n" passed and reached compose and filenames.
+_PREFIX_RE = re.compile(r"^[a-z0-9][a-z0-9-]*\Z")
 
 # Base (unprefixed) CONTAINER names — the `docker exec/cp/restart/logs/inspect` targets.
 #

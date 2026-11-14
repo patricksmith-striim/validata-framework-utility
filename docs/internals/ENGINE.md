@@ -195,7 +195,11 @@ once:
   name. Templates carry no separator of their own. Integration cases differ: their `${TID}` is
   empty in a serial run ([TEST-YAML.md](../TEST-YAML.md), "Parallel-safety rules").
 - **Provisioning happens once.** The first worker to need the cluster or a service provisions it
-  under a lock while the others wait, then reuse it.
+  under a lock while the others wait, then reuse it. The record of what was provisioned lives in
+  the state directory and is cleared when a session starts. The engine's own hermetic suite (a `-m`
+  expression that can select no `live` item, such as `-m 'not live'`) leaves it alone:
+  `scripts/live/conftest.py` gives that session a temporary state directory and drops
+  `SLT_FRAMEWORK_HOME` and `SLT_STACK_PREFIX` before the plugin's `pytest_configure` runs.
 - **Open Processor and UDF jars load once** per cluster, across workers, checkouts and worktrees:
   the record lives in the machine-wide lock directory, keyed by the cluster, and is checked against
   `LIST LIBRARIES`. A jar whose contents did not change is not reloaded; in docker mode a changed

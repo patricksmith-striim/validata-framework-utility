@@ -81,7 +81,9 @@ _STATUSES = {"passed", "failed", "skipped", "error", "xfailed", "xpassed"}
 _SAFE = re.compile(r"[^A-Za-z0-9._-]+")
 _SHA = re.compile(r"^sha256:[0-9a-f]{64}$")
 _SECRET_NAME = re.compile(r"(?i)(PASS|PASSWORD|SECRET|TOKEN|KEY|CREDENTIAL|AUTH|COMPANY_NAME|CLUSTER_NAME)")
-_USERINFO = re.compile(r"(?P<s>[A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]+@")
+# A URL's credentials: everything up to the LAST "@" of the authority, which ends at the first "/", "?" or
+# "#" (RFC 3986). Up to the first "@", a password containing one ("p@ss") kept its tail.
+_USERINFO = re.compile(r"(?P<s>[A-Za-z][A-Za-z0-9+.-]*://)[^/?#\s\"']+@")
 _FORMS = ("unreadable", "unobserved")
 
 

@@ -620,6 +620,40 @@ def _local_build_inputs(striim_dir: Path) -> dict:
     return out
 
 
+_PROBE_PREFIX = "slt-image-probe-"
+_PROBE_NAME = re.compile(r"slt-image-probe-([0-9]+)")
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True                 # another user's live process
+    return True
+
+
+def _clear_leaked_probes(run) -> None:
+    """Remove every ``slt-image-probe-<pid>`` container whose pid is no longer alive: a probe leaked by a
+    run interrupted between ``create`` and ``rm``. A live pid's probe is left alone (a concurrent check,
+    or a reused pid, which only delays the cleanup). A failed listing removes nothing."""
+    try:
+        out = run(["docker", "ps", "-a", "--filter", f"name=^{_PROBE_PREFIX}", "--format", "{{.Names}}"])
+    except OSError:
+        return
+    if getattr(out, "returncode", 1) != 0:
+        return
+    for name in (getattr(out, "stdout", "") or "").split():
+        m = _PROBE_NAME.fullmatch(name)
+        if not m or int(m.group(1)) == os.getpid() or _pid_alive(int(m.group(1))):
+            continue                # the current pid's probe is removed by name just after
+        try:
+            run(["docker", "rm", "-f", name])
+        except OSError:
+            pass
+
+
 def image_inputs_match(version: str, striim_dir: Path, run=None) -> bool:
     """True iff the image's embedded build inputs equal the checkout's, byte for byte.
 
@@ -642,7 +676,8 @@ def image_inputs_match(version: str, striim_dir: Path, run=None) -> bool:
     # a SIGINT between create and rm is invisible to `docker ps` and to `--remove-orphans` --
     # it belongs to no compose project -- yet it pins the 21 GB image, so `docker rmi` then
     # fails with a confusing reference error. Named, it is greppable
-    # (`docker ps -a --filter name=slt-image-probe`) and the next run clears it.
+    # (`docker ps -a --filter name=slt-image-probe`) and the next run clears it: the pre-clean
+    # removes every probe whose pid is no longer alive (_clear_leaked_probes), then its own name.
     # In candidate mode an image whose build inputs cannot be read has an
     # unverifiable installer identity, so a failed inspection is a non-match (rebuild).
     strict = candidate_mode()
@@ -651,6 +686,7 @@ def image_inputs_match(version: str, striim_dir: Path, run=None) -> bool:
     try:
         if not image_present(version, run=run):
             return True          # nothing to compare; ensure_image handles absence by building
+        _clear_leaked_probes(run)
         try:
             run(["docker", "rm", "-f", probe])       # clear a leak from an interrupted run
         except OSError:

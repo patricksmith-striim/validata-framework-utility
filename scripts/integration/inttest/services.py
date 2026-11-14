@@ -66,6 +66,30 @@ def _state_root() -> Path:
     return _resources.state_root()
 
 
+# The live tier's SLT_STACK_PREFIX rule (livetest.stack._PREFIX_RE): the prefix names compose
+# projects ([a-z0-9][a-z0-9_-]*), container names and files in the state dir. \Z, not $: $ also
+# matches before a final "\n".
+_PREFIX_RE = re.compile(r"^[a-z0-9][a-z0-9-]*\Z")
+
+
+class StackPrefixError(ValueError):
+    """INT_STACK_PREFIX is not a valid stack prefix."""
+
+
+def stack_prefix(env) -> str:
+    """INT_STACK_PREFIX from ``env`` ("" when unset or blank). Raises ``StackPrefixError`` on any
+    other value that does not match [a-z0-9][a-z0-9-]*: used as given, ``../x`` reached a filename
+    and a trailing newline reached compose."""
+    p = env.get("INT_STACK_PREFIX") or ""
+    if not p.strip():
+        return ""
+    if not _PREFIX_RE.match(p):
+        raise StackPrefixError(
+            f"invalid INT_STACK_PREFIX {p!r}: must match [a-z0-9][a-z0-9-]* "
+            f"(lowercase letters, digits, dashes; no whitespace)")
+    return p
+
+
 def state_name(base: str, env=None) -> str:
     """Prefix-scope a coordination filename, keeping its dotfile-ness:
     ``.int-services-up.json`` -> ``.ec-int-services-up.json``. Mirrors the live tier's
@@ -87,7 +111,7 @@ def state_name(base: str, env=None) -> str:
     Two separate CHECKOUTS never collided (each has its own scripts/integration/), which
     is exactly why this survived: it only bites when one checkout drives two stacks.
     """
-    p = (env if env is not None else os.environ).get("INT_STACK_PREFIX", "").strip()
+    p = stack_prefix(env if env is not None else os.environ)
     if not p:
         return base
     return f".{p}-{base[1:]}" if base.startswith(".") else f"{p}-{base}"
@@ -486,8 +510,7 @@ def declared_containers(compose_paths, env=None) -> list[str]:
     keeps this module dependency-light (`inttest.cli stop gcs` must work in a checkout with
     only the runtime deps installed)."""
     from inttest import paths
-    prefix = (paths.effective_env(os.environ if env is None else env).get("INT_STACK_PREFIX")
-              or "").strip()
+    prefix = stack_prefix(paths.effective_env(os.environ if env is None else env))
     names: list[str] = []
     for path in compose_paths:
         try:

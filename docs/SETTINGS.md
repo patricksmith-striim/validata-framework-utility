@@ -75,7 +75,7 @@ Start from your repository's `.env.example`. `striim-test doctor` lists the sett
 | `SLT_PRE_UP` | shell, `.env`, machine | unset | `0`: turn off every service's `pre_up` hook. |
 | `SLT_OP_RETRY_FAILED` | shell | unset | `1`: retry loading an Open Processor jar that already failed twice at the same bytes in this run. |
 | `SLT_RECOVER_RESTORE_TIMEOUT` | shell | `600` | Seconds a `recover:` phase allows for its restore. |
-| `SLT_STACK_PREFIX` | shell, `.env` | unset | Run a second, independent stack on the same machine: its containers and cleanup carry this prefix. |
+| `SLT_STACK_PREFIX` | shell, `.env` | unset | Run a second, independent stack on the same machine: its containers and cleanup carry this prefix. Lowercase letters, digits and dashes, starting with a letter or digit. |
 | `SLT_JDK<release>_HOME` | shell | on macOS, the JDK `java_home` finds | The JDK that builds Open Processor and UDF jars for that Java release, for example `SLT_JDK17_HOME`. Off macOS the JDK comes only from here. |
 | `SLT_PREBUILT_JAR_<MODULE>` | shell | unset: build the module | A jar to test in place of building that module, for example `SLT_PREBUILT_JAR_REFERENCEOP` for `ReferenceOp`; a folder is searched for the module's jar. Wins over the next two ([TESTING-YOUR-JAVA.md](TESTING-YOUR-JAVA.md)). |
 | `SLT_PREBUILT_JAR` | shell | unset | A jar, or a folder, for every module the run builds. |
@@ -340,7 +340,7 @@ The integration engine's own settings ([INTEGRATION-TESTS.md](INTEGRATION-TESTS.
 
 | Setting | Where | Default | What it does |
 |---|---|---|---|
-| `INT_STACK_PREFIX` | shell, `.env` | unset | Run a second integration stack on the same machine, with its own containers and state. |
+| `INT_STACK_PREFIX` | shell, `.env` | unset | Run a second integration stack on the same machine, with its own containers and state. Lowercase letters, digits and dashes, starting with a letter or digit. |
 | `INT_KEEP_SERVICES` | shell | unset | `1`: leave the service containers running after the session, for fast local iteration. |
 | `INT_KEEP_RESOURCES` | shell | unset | `1`: keep each case's resources after it runs. |
 | `INT_EMULATORS` | shell | unset | `1`: opt in to every integration service that declares `opt_in_env`. |

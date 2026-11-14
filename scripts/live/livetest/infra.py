@@ -783,8 +783,9 @@ def _docker_inspect(argv):
 
 
 def strip_userinfo(url):
-    import re
-    return re.sub(r"(?P<s>[A-Za-z][A-Za-z0-9+.-]*://)[^/@\s]+@", r"\g<s>", url) if isinstance(url, str) else url
+    """``url`` without its credentials: up to the last ``@`` of the authority (``evidence._USERINFO``)."""
+    from livetest.evidence import _USERINFO
+    return _USERINFO.sub(r"\g<s>", url) if isinstance(url, str) else url
 
 
 def inspect_image(container: str) -> dict:

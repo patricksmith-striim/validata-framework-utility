@@ -119,7 +119,8 @@ SECTIONS = (
                                          "twice at the same bytes in this run."),
         ("SLT_RECOVER_RESTORE_TIMEOUT", "`600`", "Seconds a `recover:` phase allows for its restore."),
         ("SLT_STACK_PREFIX", "unset", "Run a second, independent stack on the same machine: its "
-                                      "containers and cleanup carry this prefix."),
+                                      "containers and cleanup carry this prefix. Lowercase letters, digits and dashes, starting "
+                                      "with a letter or digit."),
         ("SLT_JDK<release>_HOME", "on macOS, the JDK `java_home` finds",
          "The JDK that builds Open Processor and UDF jars for that Java release, for example "
          "`SLT_JDK17_HOME`. Off macOS the JDK comes only from here."),
@@ -177,7 +178,8 @@ SECTIONS = (
     )),
     ("Integration tier", (
         ("INT_STACK_PREFIX", "unset", "Run a second integration stack on the same machine, with its own "
-                                      "containers and state."),
+                                      "containers and state. Lowercase letters, digits and dashes, starting with a letter or "
+                                      "digit."),
         ("INT_KEEP_SERVICES", "unset", "`1`: leave the service containers running after the session, for "
                                        "fast local iteration."),
         ("INT_KEEP_RESOURCES", "unset", "`1`: keep each case's resources after it runs."),
