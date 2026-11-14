@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import hashlib
-import time
 
-from livetest.assertions import AssertionFailed, refuse_unknown_keys
+from livetest.assertions import AssertionFailed, poll_holding, refuse_unknown_keys
 from livetest.resultschema import build_assertion_result
 
 # Assert a GCS object's CONTENT (for a binary writer): the
 # uploaded object exists and its bytes match the source blob, by exact hex, sha256, or
-# size. Polls until satisfied (the upload is asynchronous) or the timeout expires.
+# size. Polls until satisfied (the upload is asynchronous) or the timeout expires. A spec that
+# expects an empty object matches an object created before its bytes arrive, so it is re-read
+# until the timeout and fails as soon as the object stops matching.
+
+_EMPTY_SHA256 = hashlib.sha256(b"").hexdigest()
 
 
 class GcsSpecError(Exception):
@@ -81,32 +84,29 @@ def _check_spec(admin, spec: dict):
     return None if ok else detail
 
 
+def _expects_empty(spec: dict) -> bool:
+    # True when every check in the spec is satisfied by zero bytes.
+    return (("size" not in spec or int(spec["size"]) == 0)
+            and ("content_hex" not in spec or not str(spec["content_hex"]).replace(" ", ""))
+            and ("sha256" not in spec or _sha256_hex(spec["sha256"]) == _EMPTY_SHA256))
+
+
 def assert_gcs(admin, specs: list[dict], timeout: int, poll: float = 2.0,
                status_probe=None, *, db: str | None = None, progress=None) -> list[dict]:
-    deadline = time.monotonic() + timeout
-    while True:
-        if status_probe:
-            status_probe()
-        results = [_evaluate(admin, s) for s in specs]
-        detail = next((d for ok, d, _, _ in results if not ok), None)
-        if detail is None:
-            return [
-                build_assertion_result(type="gcs", status="passed", spec=_recorded(s),
-                                        target=f"{s['bucket']}/{s['object']}", db=db,
-                                        detail="ok", expected=exp, actual=act)
-                for s, (ok, d, exp, act) in zip(specs, results)
-            ]
-        if time.monotonic() >= deadline:
-            records = [
-                build_assertion_result(type="gcs", status="passed" if ok else "failed", spec=_recorded(s),
-                                        target=f"{s['bucket']}/{s['object']}", db=db,
-                                        detail="ok" if ok else d, expected=exp, actual=act)
-                for s, (ok, d, exp, act) in zip(specs, results)
-            ]
-            raise AssertionFailed(f"gcs assertion not satisfied within {timeout}s: {detail}", records)
-        if progress:
-            try:
-                progress(timeout - (deadline - time.monotonic()), float(timeout))
-            except Exception:
-                pass
-        time.sleep(poll or 0.05)
+    holds = [_expects_empty(s) for s in specs]
+    results, outcome = poll_holding(lambda idx: [_evaluate(admin, specs[i]) for i in idx], holds,
+                                    timeout, poll, status_probe, progress)
+    records = [
+        build_assertion_result(type="gcs", status="passed" if ok else "failed", spec=_recorded(s),
+                                target=f"{s['bucket']}/{s['object']}", db=db,
+                                detail="ok" if ok else d, expected=exp, actual=act)
+        for s, (ok, d, exp, act) in zip(specs, results)
+    ]
+    if outcome == "passed":
+        return records
+    detail = next(d for ok, d, _, _ in results if not ok)
+    if outcome == "broke":
+        raise AssertionFailed(
+            f"gcs assertion: {detail}. The spec expects an empty object, so it must hold until the "
+            f"{timeout}s timeout; it matched, then stopped matching.", records)
+    raise AssertionFailed(f"gcs assertion not satisfied within {timeout}s: {detail}", records)

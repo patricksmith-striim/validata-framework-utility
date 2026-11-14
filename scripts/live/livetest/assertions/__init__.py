@@ -54,3 +54,40 @@ class ExpectedAssertionFailure(AssertionFailed):
             wrapped.__cause__ = failure
             return wrapped
         return failure
+
+
+def poll_holding(evaluate, holds, timeout, poll, status_probe=None, progress=None):
+    """Poll ``evaluate(indices)`` -- one result per index, ``result[0]`` true when that spec
+    matched -- until every spec matches on one read, or the deadline passes.
+
+    A spec whose ``holds[i]`` is true asserts only upper bounds, zeros or absences, which the
+    first read can satisfy before anything has happened. Once every spec matches, those specs
+    alone are read again until the deadline, and a read on which one misses ends the poll.
+    Returns ``(results, outcome)``: ``"passed"``, ``"expired"`` (a spec never matched) or
+    ``"broke"`` (a held spec matched, then missed)."""
+    import time
+    deadline = time.monotonic() + timeout
+    results = [None] * len(holds)
+    holding = False
+    while True:
+        if status_probe:
+            status_probe()
+        idx = [i for i, h in enumerate(holds) if h or not holding]
+        for i, r in zip(idx, evaluate(idx)):
+            results[i] = r
+        if holding and not all(results[i][0] for i in idx):
+            return results, "broke"
+        matched = all(r[0] for r in results)
+        expired = time.monotonic() >= deadline
+        if matched and (expired or not any(holds)):
+            return results, "passed"
+        if expired:
+            return results, "expired"
+        holding = matched
+        if progress:
+            try:
+                progress(timeout - (deadline - time.monotonic()), float(timeout))
+            except Exception:
+                pass
+        step = poll or 0.05      # floor avoids a busy-wait when poll=0 with a positive timeout
+        time.sleep(min(step, max(0.0, deadline - time.monotonic())) if holding else step)

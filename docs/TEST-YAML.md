@@ -2252,6 +2252,10 @@ assert:
       # or: content_hex: <hex>       # exact byte-for-byte match
       # or: size: 12345              # byte-length only
 ```
+Polls until every spec matches or `timeout` expires. A spec that expects an empty object
+(`size: 0`, an empty `content_hex`, or the sha256 of zero bytes) matches an object created
+before its bytes arrive, so it is read again until `timeout` and fails as soon as the object
+stops matching.
 
 ### `json` — JSON column content assertions (e.g. SpannerWriter JSON columns)
 <!-- snippet: fragment -->
@@ -2332,7 +2336,13 @@ other keys, a non-numeric bound, or `min > max`. Counts only: rates and clock fi
 `target:` and `component:` are exclusive. `component:` names any component in the app's `MON` tree
 (a name with a dot is used as is; a name the tree does not list is read as `${NS}.<name>`). Matchers
 check a figure's form when its value differs run to run: `{present: true}` (not null, not empty),
-`{absent: true}` (missing or null; an empty `MON` body fails instead) and `{matches: <regex>}`. Strings, patterns and component names are
+`{absent: true}` (missing or null; an empty `MON` body fails instead) and `{matches: <regex>}`.
+A spec with `{absent: true}` needs a positive figure beside it (a count above zero, a `min`
+above zero, a string, `present` or `matches`), refused at load otherwise: it shows the component
+has published, and on its own a misspelt name would pass for ever. A spec with no positive
+figure (only `max` bounds, zeros and absences) already matches before anything has happened, so
+once every spec matches it is read again until `timeout`, and fails as soon as it stops
+matching; set `timeout` to the window it must hold for. Strings, patterns and component names are
 token-rendered when the tier runs, so they can carry a token captured earlier; inside `matches` a
 token's value is regex-escaped, so `"^\\^ ${RESTART}$"` matches that position literally. A matcher is a
 mapping with exactly one of these keys; a pattern is compiled at load unless it carries a token.
@@ -2417,7 +2427,9 @@ name containing a dot is used as is. `rows:` asserts entries of an MXBean `Map` 
 the exporter writes one line per entry with the entry's key in a `key` label; each key is
 token-rendered and selects its line. A spec needs `attributes:`, `rows:` or both. Scrapes the exporters of the app-group JVMs — `STRIIM_URL`'s host at
 `SLT_STRIIM_JMX_HOST_PORT` (default 7071) and `SLT_STRIIM_NODE_JMX_HOST_PORT` (default 7075) —
-and polls until every attribute matches or `timeout` expires. Fails if the bean is on no JVM
+and polls until every attribute matches or `timeout` expires. A spec with no positive value
+(only `max` bounds, zeros and `false`) already matches before the OP has done anything, so it is
+read again until `timeout` and fails as soon as it stops matching. Fails if the bean is on no JVM
 (listing unreachable endpoints and the exporter lines seen for that domain, such as
 `com_example_cache_*`) or on more than one: each JVM's bean counts only its own events, so the tier needs the OP to run on exactly one node. A
 deploy that places an instance on every node of a multi-node group (a `cluster` topology) exports

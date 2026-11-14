@@ -353,5 +353,88 @@ def test_an_absent_only_spec_fails_on_an_empty_mon_body():
         assert_monitor(FakeTree({}), "NS.App", [{"component": "Src", "metrics": {
             "lastErrorPosition": {"absent": True}}}], timeout=0, poll=0)
     records = assert_monitor(FakeTree({"NS.Src": {"input": "5"}}), "NS.App", [{"component": "Src", "metrics": {
-        "lastErrorPosition": {"absent": True}}}], timeout=0, poll=0)
+        "input": 5, "lastErrorPosition": {"absent": True}}}], timeout=0, poll=0)
     assert records[0]["status"] == "passed"
+
+
+# ---- upper bounds, zero and absent (a figure that is right before anything happened) -----
+
+@pytest.mark.parametrize("metrics", [
+    {"gone": {"absent": True}},
+    {"gone": {"absent": True}, "discarded": 0},
+    {"gone": {"absent": True}, "discarded": {"max": 3}},
+    {"gone": {"absent": True}, "discarded": {"min": 0, "max": 3}},
+    {"gone": {"absent": True}, "ops": {"Insert": 0}},
+    {"gone": {"absent": True}, "noop": "{}"},
+    {"gone": {"absent": True}, "zero": "0"},
+])
+def test_absent_needs_a_positive_figure_in_the_same_spec(metrics):
+    with pytest.raises(MonitorSpecError, match="'absent' needs a positive figure"):
+        parse_monitor_specs([{"component": "Src", "metrics": metrics}])
+
+
+@pytest.mark.parametrize("companion", [
+    {"input": 3}, {"input": {"min": 1}}, {"input": {"min": 1, "max": 2}}, {"pos": {"present": True}},
+    {"pos": {"matches": "^x"}}, {"pos": "^ abc"}, {"ops": {"Insert": 2}},
+])
+def test_absent_with_a_positive_companion_loads(companion):
+    parse_monitor_specs([{"component": "Src", "metrics": {"gone": {"absent": True}, **companion}}])
+
+
+def test_fwl2_5_absent_for_a_figure_name_that_never_exists_is_refused():
+    # The review's defect test, inverted: a misspelt absent figure alone can never fail.
+    with pytest.raises(MonitorSpecError, match="'absent' needs a positive figure"):
+        parse_monitor_specs([{"metrics": {"discardedEventCuont": {"absent": True}}}])
+
+
+def test_fwl2_5_max_and_zero_hold_until_the_deadline():
+    # The review's defect test, inverted: the first read already matches, so it proves nothing.
+    import time
+    specs = parse_monitor_specs([{"metrics": {"discardedEventCount": {"max": 0}, "numberOfDdls": 0}}])
+    fake = FakeStriim(["NS.tgt"], [{"discardedEventCount": 0, "numberOfDdls": "0"}])
+    t0 = time.monotonic()
+    records = assert_monitor(fake, "NS.App", specs, timeout=0.3, poll=0.02)
+    assert time.monotonic() - t0 >= 0.3
+    assert fake.polls > 2 and records[0]["status"] == "passed"
+
+
+def test_an_upper_bound_that_breaks_before_the_deadline_fails_at_once():
+    import time
+    fake = FakeStriim(["NS.tgt"], [{"discardedEventCount": 0}, {"discardedEventCount": 0},
+                                   {"discardedEventCount": 4}])
+    t0 = time.monotonic()
+    with pytest.raises(AssertionFailed, match=r"discardedEventCount: shows 4, above max 0") as e:
+        assert_monitor(fake, "NS.App", [{"metrics": {"discardedEventCount": {"max": 0}}}],
+                       timeout=30, poll=0)
+    assert time.monotonic() - t0 < 5 and fake.polls == 3
+    assert "matched, then stopped matching" in str(e.value)
+    assert e.value.records[0]["status"] == "failed"
+
+
+def test_an_upper_bound_spec_may_match_late_and_then_holds():
+    # An empty body before the first snapshot is a miss, not a break.
+    fake = FakeStriim(["NS.tgt"], [{}, {"numberOfDdls": 0}])
+    records = assert_monitor(fake, "NS.App", [{"metrics": {"numberOfDdls": 0}}], timeout=0.2, poll=0.02)
+    assert records[0]["status"] == "passed" and fake.polls > 2
+
+
+def test_an_upper_bound_spec_that_never_matches_fails_at_the_deadline():
+    fake = FakeStriim(["NS.tgt"], [{"numberOfDdls": 2}])
+    with pytest.raises(AssertionFailed, match="not satisfied within"):
+        assert_monitor(fake, "NS.App", [{"metrics": {"numberOfDdls": 0}}], timeout=0.1, poll=0.02)
+
+
+def test_a_spec_with_a_positive_figure_still_passes_on_its_first_match():
+    fake = FakeStriim(["NS.tgt"], [{"processed": "5", "discardedEventCount": 0}])
+    records = assert_monitor(fake, "NS.App", [{"metrics": {"processed": 5, "discardedEventCount": {"max": 0}}}],
+                             timeout=30, poll=0)
+    assert records[0]["status"] == "passed" and fake.polls == 1
+
+
+def test_a_holding_spec_rereads_only_itself_after_the_positive_specs_pass():
+    fake = FakeTree({"NS.Src": {"input": "5"}, "NS.Tgt": {"numberOfDdls": "0"}})
+    records = assert_monitor(fake, "NS.App", [{"component": "Src", "metrics": {"input": 5}},
+                                              {"component": "Tgt", "metrics": {"numberOfDdls": 0}}],
+                             timeout=0.2, poll=0.02)
+    assert [r["status"] for r in records] == ["passed", "passed"]
+    assert fake.read.count("NS.Src") == 1 and fake.read.count("NS.Tgt") > 2
