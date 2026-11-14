@@ -18,8 +18,14 @@ def test_compose_lock_single_file(monkeypatch, tmp_path):
 def test_no_filelock_carries_a_wait():
     # A worker queued on the compose/provision lock must wait out a sibling's bring-up: at
     # timeout=120 the waiters failed with filelock.Timeout while Teradata was still booting.
-    # timeout=0 (the session lock's non-blocking probe) is not a wait and is allowed.
+    # timeout=0 (the session lock's non-blocking probe) is not a wait and is allowed. A named
+    # lock bound is allowed too, and only while it outlasts a sibling's whole compose critical
+    # section (a reset `down`, then `up -d --wait` and its post-up), each bounded on its own.
     import ast
+    from livetest import dockercmd
+    bounds = {"dockercmd.LOCK_WAIT_S": dockercmd.LOCK_WAIT_S}
+    for name, value in bounds.items():
+        assert value >= dockercmd.COMPOSE_DOWN_TIMEOUT_S + 2 * dockercmd.COMPOSE_UP_TIMEOUT_S, (name, value)
     root = Path(plugin.__file__).parent.parent
     waits = []
     for src in sorted([*root.glob("inttest/*.py"), *root.glob("tests/*.py")]):
@@ -30,7 +36,8 @@ def test_no_filelock_carries_a_wait():
             timeout = next((k.value for k in node.keywords if k.arg == "timeout"),
                            node.args[1] if len(node.args) > 1 else None)
             if timeout is not None and not (isinstance(timeout, ast.Constant)
-                                            and timeout.value in (0, -1)):
+                                            and timeout.value in (0, -1)) \
+                    and ast.unparse(timeout) not in bounds:
                 waits.append(f"{src.relative_to(root)}:{node.lineno}")
     assert not waits, waits
 
