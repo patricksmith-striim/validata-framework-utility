@@ -331,3 +331,90 @@ def test_exec_an_operators_own_mysql_is_set_up_in_live_mode(run_case):
     assert run.ret == 0, run.text
     admins = [(e["role"], e["live"]) for e in run.events() if e["event"] == "mysql_admin"]
     assert ("source", True) in admins and "mysql_setup" in run.names()
+
+
+# ---------------------------------------------------------------- the infrastructure guard, executed
+# LiveItem.runtest marks a skip that means "nothing here could be tested" at three sites: no
+# reachable Striim, no Docker for a declared service, a missing build prerequisite. A run whose
+# live cases were all skipped that way exits 1, and the banner offers SLT_ALLOW_NO_CLUSTER only for
+# absent infrastructure, naming what was absent.
+
+GUARD = "LIVE TIER PROVED NOTHING: 1 live case(s) could not be run, and none executed."
+OP = lambda y: y.replace("requires: [postgres]\n", "requires: [postgres]\nop: {jar: java/OpenProcessors/StubOp}\n")
+
+
+def test_exec_no_cluster_run_fails_as_proved_nothing(run_case):
+    run = run_case("legacy", {"no_cluster": True})
+    assert run.ret == 1, run.text[-2000:]
+    assert GUARD in run.text
+    assert "Set SLT_ALLOW_NO_CLUSTER=1 if you meant to run without a cluster." in run.text
+    assert "Docker was unavailable" not in run.text
+    status, _, xml = run.junit()
+    assert status == "skipped" and "no reachable Striim (hermetic no_cluster)" in xml, xml
+    assert "resolve" not in run.names()
+
+
+def test_exec_no_cluster_opt_out_keeps_the_skip_green(run_case):
+    run = run_case("legacy", {"no_cluster": True}, env={"SLT_ALLOW_NO_CLUSTER": "1"})
+    assert run.ret == 0, run.text[-2000:]
+    assert "LIVE TIER PROVED NOTHING" not in run.text
+    assert run.junit()[0] == "skipped"
+
+
+def test_exec_docker_absent_run_fails_as_proved_nothing(run_case):
+    run = run_case("legacy", {"docker_absent": True})
+    assert run.ret == 1, run.text[-2000:]
+    assert GUARD in run.text
+    assert "Docker was unavailable; SLT_ALLOW_NO_CLUSTER=1 opts out of this check." in run.text
+    assert "without a cluster" not in run.text
+    status, _, xml = run.junit()
+    assert status == "skipped" and "service postgres unavailable (no Docker)" in xml, xml
+    assert "deploy" not in run.names()
+
+
+def test_exec_docker_absent_opt_out_keeps_the_skip_green(run_case):
+    run = run_case("legacy", {"docker_absent": True}, env={"SLT_ALLOW_NO_CLUSTER": "1"})
+    assert run.ret == 0, run.text[-2000:]
+    assert "LIVE TIER PROVED NOTHING" not in run.text
+
+
+def test_exec_missing_build_prerequisite_fails_even_with_the_opt_out(run_case):
+    run = run_case("legacy", {"op_stub": True, "op_build": "missing"}, edit=OP, env={"SLT_ALLOW_NO_CLUSTER": "1"})
+    assert run.ret == 1, run.text[-2000:]
+    assert GUARD in run.text
+    assert "SLT_ALLOW_NO_CLUSTER" not in run.text.split(GUARD, 1)[1], "a broken build is never offered the opt-out"
+    status, _, xml = run.junit()
+    assert status == "skipped" and "cannot run mvn to build StubOp" in xml, xml
+
+
+# ---------------------------------------------------------------- cleanup failures and the outcome
+
+def test_exec_exclusive_cluster_teardown_failure_fails_the_run(run_case):
+    run = run_case("initial-load", {"initial_load": True, "provisioned": True, "compose": "compose.yaml",
+                                    "cluster_down_fail": True},
+                   declared=False, env={"SLT_INFRA_OWNERSHIP": "exclusive"})
+    env = _agree(run, "error")
+    assert "compose_down" in run.names() and "cluster_down" in run.names()
+    teardown = env["resources"]["infrastructure"]["teardown"]
+    assert teardown["status"] == "failed"
+    # "striim" is also the fake admin password, so the envelope's redactor masks it in the name
+    assert [f["resource"].rsplit(" ", 1)[-1] for f in teardown["failures"]] == ["cluster"]
+    assert "the node container is restarting" in teardown["failures"][0]["error"]
+    assert "infrastructure teardown failed" in run.junit()[2]
+
+
+def test_exec_failed_transaction_pool_close_fails_a_green_case(run_case):
+    tx = ("transactions:\n"
+          "  - {session: s1, op: begin, db: postgres-source, when: pre_deploy}\n"
+          "  - {session: s1, op: commit, when: pre_deploy}\n")
+    run = run_case("legacy", {"tx_close_fail": True}, edit=lambda y: y + tx)
+    _agree(run, "failed")
+    assert {"tx_pool", "tx_close"} <= set(run.names()) and "deploy" in run.names()
+    assert "transaction session s1 could not be closed: connection reset" in run.junit()[2]
+
+
+def test_exec_blockless_teardown_failure_keeps_the_case_outcome(run_case):
+    run = run_case("legacy", {"unowned_teardown_fail": True}, args=("-s",))
+    _agree(run, "passed")
+    assert "teardown_unowned" in run.names()
+    assert "best-effort teardown failed" in run.text and "permission denied for schema qatarget" in run.text

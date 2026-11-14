@@ -323,3 +323,50 @@ def test_stop_runs_with_the_dotenv_prefix_in_its_environment(tmp_path, monkeypat
     monkeypatch.setattr("sys.argv", ["livetest.cli", "stop", "striim", "postgres"])
     assert cli.main() == 0
     assert seen == [(["striim", "postgres"], "review-a")]
+
+
+def _ggtrail(monkeypatch, *argv):
+    """Run `python -m livetest.cli ggtrail ...` with the runner's two entry points recorded."""
+    from livetest import project
+    from livetest.ggtrail import runner
+    calls = []
+    monkeypatch.setattr(project, "load_and_activate", lambda *a, **k: None)
+    monkeypatch.setattr(cli, "_adopt_stack_prefix", lambda env=None: None)
+    monkeypatch.setattr(runner, "generate_from_yaml",
+                        lambda workload, out: calls.append(("batch", workload, out)) or {"summary": {"ops": 1}})
+    monkeypatch.setattr(runner, "stream_from_yaml",
+                        lambda workload, out, rate, duration: calls.append(("stream", workload, out, rate, duration))
+                        or {"summary": {"ops": 2}})
+    monkeypatch.setattr("sys.argv", ["livetest.cli", "ggtrail", *argv])
+    assert cli.main() == 0
+    return calls
+
+
+def test_ggtrail_workload_and_out_generate_a_batch(monkeypatch, capsys):
+    from pathlib import Path
+    calls = _ggtrail(monkeypatch, "--workload", "w.yaml", "--out", "trail")
+    assert calls == [("batch", Path("w.yaml"), Path("trail"))]
+    assert '"ops": 1' in capsys.readouterr().out
+
+
+def test_ggtrail_rate_and_duration_stream(monkeypatch):
+    from pathlib import Path
+    calls = _ggtrail(monkeypatch, "--workload", "w.yaml", "--out", "trail", "--rate", "50", "--duration", "2.5")
+    assert calls == [("stream", Path("w.yaml"), Path("trail"), 50.0, 2.5)]
+
+
+def test_ggtrail_max_records_per_file_is_parsed_and_left_to_the_workload(monkeypatch):
+    """The help says rollover size is normally set in the workload.yaml; the flag is accepted (an
+    integer) and not forwarded to the runner."""
+    from pathlib import Path
+    calls = _ggtrail(monkeypatch, "--workload", "w.yaml", "--out", "trail", "--max-records-per-file", "10")
+    assert calls == [("batch", Path("w.yaml"), Path("trail"))]
+    with pytest.raises(SystemExit):
+        _ggtrail(monkeypatch, "--workload", "w.yaml", "--out", "trail", "--max-records-per-file", "ten")
+
+
+def test_ggtrail_needs_workload_and_out(monkeypatch):
+    with pytest.raises(SystemExit):
+        _ggtrail(monkeypatch, "--out", "trail")
+    with pytest.raises(SystemExit):
+        _ggtrail(monkeypatch, "--workload", "w.yaml")

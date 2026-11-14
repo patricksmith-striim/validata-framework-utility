@@ -134,6 +134,18 @@ def test_refuses_main_behind_origin(repo, tmp_path, capsys):
     assert "origin/main" in capsys.readouterr().err
 
 
+def test_no_fetch_compares_with_the_last_fetched_origin_main(repo, tmp_path, capsys):
+    """`--no-fetch` (RELEASING.md): main is compared with origin/main as last fetched, so a push
+    elsewhere since then is not seen and the preflight passes."""
+    other = tmp_path / "other"
+    subprocess.run(["git", "clone", "-q", str(tmp_path / "origin.git"), str(other)], check=True)
+    commit(other, "Landed elsewhere (#3)")
+    git(other, "push", "-q", "origin", "main")
+    assert run(repo, "--bump", "minor", "--no-fetch", "--skip-tests") == 0
+    captured = capsys.readouterr()
+    assert "refused" not in captured.err and "DRY RUN" in captured.out
+
+
 def test_refuses_an_existing_tag_or_a_version_not_above_the_last_release(repo, capsys):
     git(repo, "tag", "-a", "v0.2.0", "-m", "v0.2.0")
     git(repo, "push", "-q", "origin", "v0.2.0")

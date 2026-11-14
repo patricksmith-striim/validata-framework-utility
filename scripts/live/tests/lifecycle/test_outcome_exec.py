@@ -158,6 +158,21 @@ def test_keep_on_error_drops_a_skip_after_deploy(run_case):
     assert run.dump()["namespaces"] == []
 
 
+def test_a_collected_case_outside_the_suite_root_is_deselected(run_case):
+    """pytest is handed a directory outside the selected suite: what it collects there never runs."""
+    def outside(root, name):
+        dest = root / "elsewhere" / "outsider"
+        shutil.copytree(root / "cases" / "legacy", dest)
+        manifest = dest / "test.yaml"
+        manifest.write_text(manifest.read_text().replace(f"name: {name}\n", "name: lc-outsider\n"))
+    run = run_case("legacy", args=("elsewhere",), prepare=outside, guard=True)
+    assert run.ret == 0 and run.junit()[0] == "passed", run.text
+    sel = json.loads((run.root / "live" / "selection.json").read_text())
+    assert [(e["manifestName"], e["reason"]) for e in sel["deselected"]] == [("lc-outsider", "outside-suite")]
+    assert [e["manifestName"] for e in sel["selected"]] == ["lc-legacy"]
+    assert run.names().count("deploy") == 1
+
+
 # A partial run: one case is executed and reports an expected-failure outcome, the other could not
 # run because Docker was unavailable for its service. The infra guard keeps the exit status of a
 # partial run, so the executed XPASS/XFAIL must count as executed.

@@ -290,3 +290,15 @@ def test_outer_pytest_topology_gate_obeys_strict_service_policy(monkeypatch, mod
         assert isinstance(exc, pytest.fail.Exception if policy == 'fail' else pytest.skip.Exception)
     else:
         pytest.fail('eligibility unexpectedly passed')
+
+
+def test_the_hook_is_handed_the_framework_python(tdx, monkeypatch):
+    """SLT_FRAMEWORK_PYTHON (SETTINGS.md): a pre_up script runs Python helpers with the framework's
+    own interpreter, whatever `python3` on PATH is."""
+    import sys
+    (tdx / "fetch.sh").write_text("#!/bin/sh\nmkdir -p deps && : > deps/disk1 && "
+                                  "echo \"$SLT_FRAMEWORK_PYTHON\" > python\n")
+    monkeypatch.setenv("SLT_FRAMEWORK_PYTHON", "/not/this/python")
+    preflight = _preflight(monkeypatch)
+    assert list(preflight._bring_up_services(["tdx"], {}, apply_gate=False)) == ["tdx"]
+    assert (tdx / "python").read_text().strip() == sys.executable

@@ -263,3 +263,15 @@ def _waits_at_most(fn, seconds=10):
     t.join(seconds)
     assert not t.is_alive(), f"still waiting for the lock after {seconds}s"
     return box
+
+
+@pytest.mark.parametrize("budget", ["12", "40"])
+def test_own_cluster_that_never_authenticates_is_waited_for_slt_striim_boot_wait(monkeypatch, tmp_path, budget):
+    """SLT_STRIIM_BOOT_WAIT (default 300s): how long our own booting Docker cluster may take to
+    authenticate before the run gives up on it."""
+    monkeypatch.setenv("SLT_STRIIM_BOOT_WAIT", budget)
+    monkeypatch.setattr(plugin.stack, "striim_container", lambda: "slt-striim")
+    ctx, config, clock, calls, progress = resolve(monkeypatch, tmp_path, [groups(False)], reachable=False)
+    assert ctx is None and calls == []
+    assert f"slt-striim is running but did not authenticate within {budget}s" in config._slt_striim_reason
+    assert int(budget) <= clock.now < 300, "waited its own budget, not the 300s default"

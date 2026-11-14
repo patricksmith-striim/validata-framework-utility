@@ -202,52 +202,12 @@ def test_sessionfinish_actually_assigns_the_exit_status(monkeypatch):
 
 
 # --------------------------------------------------------------- the marking sites themselves
-# The three assignments in LiveItem._runtest are the only places the flag is ever set, and no
-# hermetic test can execute runtest (it needs live services). Without these assertions, deleting
-# the cluster-unreachable assignment -- the one line that fixes the bug this feature exists for
-# -- leaves every other test in this file green while the silent pass returns in full. Pinned at
-# source level, the idiom test_plugin_routing.py already uses for this method.
-
-def test_runtest_marks_exactly_the_three_blocked_paths():
-    import inspect
-    src = inspect.getsource(plugin.LiveItem._runtest)
-    assert src.count("self._slt_infra_skip =") == 5, (
-        "five sites mean 'we could not test this': cluster unreachable, Docker absent, the OP "
-        "jar could not be built, and a required service unavailable (its prerequisites, or its "
-        "driver jar). A sixth needs a deliberate decision, not a silent addition."
-    )
-
-
-def test_each_cause_is_bound_to_the_skip_it_guards():
-    """Counting the literals is not enough: swapping two of them passes a count-and-membership
-    check while inverting the behaviour -- the cluster outage would stop offering the opt-out
-    and the broken build would start offering it. So each cause is pinned to the SPECIFIC skip
-    that follows it, which also catches a mark whose skip is conditional or moved away.
-    """
-    import inspect
-    lines = inspect.getsource(plugin.LiveItem._runtest).splitlines()
-    expected = {
-        '"cluster"': "_slt_striim_reason",
-        '"docker"': "unavailable (no Docker)",
-        '"build"': "{m.name}: {e}",
-        '"service"': "unavailable: {_why}",
-    }
-    seen = []
-    for i, line in enumerate(lines):
-        if "self._slt_infra_skip =" not in line:
-            continue
-        cause = next((c for c in expected if c in line), None)
-        assert cause, "unknown cause on line %d: %s" % (i, line.strip())
-        seen.append(cause)
-        window = " ".join(lines[i + 1:i + 3])
-        if cause == '"service"' and window.strip().startswith("raise") \
-                and "except pytest.skip.Exception" in lines[i - 1]:
-            continue                       # _prepare_service's own skip, re-raised once marked
-        assert "pytest.skip(" in window, (
-            "line %d marks the item but does not skip immediately: %s" % (i, line.strip()))
-        assert expected[cause] in window, (
-            "%s is not on the skip it is supposed to describe; got: %s" % (cause, window.strip()))
-    assert sorted(seen) == sorted(['"cluster"', '"docker"', '"build"', '"service"', '"service"'])
+# The assignments in LiveItem._runtest are executed through the real plugin: cluster unreachable,
+# Docker absent and a missing build prerequisite in tests/lifecycle/test_plugin_exec.py
+# (test_exec_no_cluster_*, test_exec_docker_absent_*, test_exec_missing_build_prerequisite_*), and
+# the two service-unavailable sites (prerequisites, driver jar) in tests/lifecycle/test_outcome_exec.py
+# (test_a_service_that_cannot_be_prepared_*, test_a_missing_service_jar_*): each run must exit
+# with the banner naming its own cause, so a dropped or swapped mark fails there.
 
 
 def test_a_build_failure_does_not_offer_the_no_cluster_escape(monkeypatch, capsys):

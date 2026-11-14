@@ -378,6 +378,9 @@ def resolve_service(infra, svc, env, started, resolve_fn, progress=None):
         return _real.resolve_service(infra, svc, env, started, resolve_fn, progress=progress)
     if SC.get("service_fail"):
         raise RuntimeError("service setup failed: slt-postgres exited before accepting connections")
+    if SC.get("docker_absent"):                          # no Docker daemon to start the service in
+        from livetest.services import DockerUnavailable
+        raise DockerUnavailable("Cannot connect to the Docker daemon at unix:///nonexistent")
     for rel in SC.get("rewrite_on_resolve", []):         # A case file changed after the input snapshot
         Path(rel).write_text("id\n9\n")
     started.add(f"slt-{svc}")
@@ -385,7 +388,8 @@ def resolve_service(infra, svc, env, started, resolve_fn, progress=None):
         infra.services.append({"name": svc, "container": f"slt-{svc}", "status": "reused"})
     return SimpleNamespace(name=svc, mode="live" if svc in SC.get("live_services", ()) else "docker", started=True, base={
         "host": "localhost", "port": 5432, "dbname": "sltdb", "admin_user": "postgres", "admin_password": "striim",
-        "source_user": "qasource", "source_password": "striim", "target_user": "qatarget", "target_password": "striim"})
+        "source_user": "qasource", "source_password": "striim", "target_user": "qatarget", "target_password": "striim",
+        **SC.get("base_extra", {})})
 
 
 def deploy(client, tql, ns, name):
@@ -598,7 +602,32 @@ if SC.get("op_poison"):
 
     P.opregistry.in_use = lambda **kw: traced_lock("shared", _real_in_use(**kw))
     P.opregistry.exclusive_reload = lambda: traced_lock("exclusive", _real_exclusive_reload())
-P._sp.cluster_down = lambda *a, **k: log("cluster_down")
+def cluster_down(*a, **k):
+    log("cluster_down")
+    if SC.get("cluster_down_fail"):
+        raise RuntimeError("docker compose down failed: the node container is restarting")
+
+
+P._sp.cluster_down = cluster_down
+if SC.get("unowned_teardown_fail"):                        # a block-less case's best-effort teardown raises
+    def _failing_teardown_unowned(*a, **k):
+        log("teardown_unowned")
+        raise RuntimeError("DROP TABLE refused: permission denied for schema qatarget")
+    P.teardown_unowned = _failing_teardown_unowned
+if SC.get("tx_close_fail"):                                # a transactions: pool whose close() raises
+    import livetest.transactions as _T
+
+    class _FailingPool:
+        def __init__(self, *a, **k):
+            log("tx_pool")
+
+        def run_phase(self, steps, when):
+            log("tx_phase", when=when)
+
+        def close(self):
+            log("tx_close")
+            raise RuntimeError("transaction session s1 could not be closed: connection reset")
+    _T.Pool = _FailingPool
 I.resolve_service = resolve_service
 L._pg_connect = lambda **kw: FakeConn(kw["user"])
 L.status_bounded = lambda client, app, remaining: client.current_status(app)
