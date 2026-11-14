@@ -1615,6 +1615,18 @@ def note_unowned_teardown(resources: dict, outcome: dict) -> dict:
         foreign.append(item)
     return {**resources, "verificationGaps": gaps, "foreign": foreign}
 
+def fold_unowned_teardown(cleanup, failed: dict) -> None:
+    """A failed delete of an unowned kind fails the cleanup, as a failed Oracle-observer or postgres-admin
+    reset does: each `"<kind> <name>"` subject of `teardown_unowned`'s `failed` becomes one failure."""
+    if not failed:
+        return
+    cleanup.status, cleanup.verified = "failed", False
+    cleanup.detail = "; ".join(filter(None, (cleanup.detail, "unowned-teardown-failed: " + "; ".join(
+        f"{subject}: {error}" for subject, error in failed.items()))))
+    for subject, error in failed.items():
+        kind, _, name = subject.partition(" ")
+        cleanup.failures.append({"kind": kind, "name": name, "error": error})
+
 def should_keep_resources(env: dict, deploy_attempted: bool, succeeded: bool) -> bool:
     """True when the test's resources should be left standing for manual inspection.
 
@@ -3181,7 +3193,7 @@ class LiveItem(pytest.Item):
                 smoke_spec = m.assert_.get("smoke")
                 smoke_apps = [f"{app}{suffix}" for suffix in smoke_spec] if isinstance(smoke_spec, list) else [app]
 
-                def _terminal_probe():
+                def _terminal_probe(after_last=False):
                     # Under expect_halt the halt is the EXPECTED end state, and a data/diff
                     # assertion is then a question about what the target holds after it --
                     # "did a fragment of the failed transaction land?" -- so the poll must
@@ -3192,7 +3204,8 @@ class LiveItem(pytest.Item):
                     for a in smoke_apps:
                         st = client.current_status(a)
                         if st in TERMINAL_STATUSES:
-                            raise AssertionError(f"{m.name}: {a} entered terminal status {st!r} during assertion polling")
+                            when = "after the last assertion" if after_last else "during assertion polling"
+                            raise AssertionError(f"{m.name}: {a} entered terminal status {st!r} {when}")
 
                 ran = False
 
@@ -4027,6 +4040,11 @@ class LiveItem(pytest.Item):
                             xspecs, ns, timeout=m.timeout, status_probe=_terminal_probe,
                             progress=_hb("asserting jmx"))
                         ran = True
+                    # A polling tier reads the status only before each read, and smoke only through
+                    # its settle: an app that dies after the last passing read would pass. One read
+                    # after the last tier closes that window (skipped under expect_halt).
+                    if ran:
+                        _terminal_probe(after_last=True)
                 except AssertionFailed as e:
                     self._slt_records.extend(e.records)
                     raise
@@ -4141,17 +4159,26 @@ class LiveItem(pytest.Item):
             self._slt_cleanup = cleanup.record()
             self._slt_resources = cleanup.resources()
             if m.lifecycle is None and _slt_keep_reason is None:
-                # the kinds the ledger never deletes keep their pre-ledger teardown (no behaviour change
-                # for a case without the block)
+                # the kinds the ledger never deletes keep their pre-ledger teardown
+                _unowned_failed = {}
                 try:
                     _unowned = teardown_unowned(admins, m.ddl_files, tokens, gcs_cleanup, kafka_cleanup,
                                                 m.assert_.get("file"), lambda _p: clear_server_files(ctx, _p),
                                                 _run_scoped_uploads(_slt_upload_names(), tokens),
                                                 lambda _n: opartifacts.delete_artifacts(ctx, _n),
                                                 oracle_observer_failed=bool(_observers["failed"]))
+                    _unowned_failed = dict(_unowned["failed"])
                     self._slt_resources = note_unowned_teardown(self._slt_resources, _unowned)
                 except Exception as _e:         # noqa: BLE001 - never replace the case's own outcome
                     print(f"[slt] WARNING: {m.name}: best-effort teardown failed: {_e!r}")
+                    _unowned_failed[f"unowned-teardown {m.name}"] = repr(_e)
+                # A leftover table, topic, bucket, upload or output part is a cleanup failure, not
+                # only a gap line: it fails a case that had nothing else in flight (below).
+                fold_unowned_teardown(cleanup, _unowned_failed)
+                self._slt_cleanup = cleanup.record()
+                self._slt_resources = {**self._slt_resources,
+                                       "cleanupVerified": bool(self._slt_resources.get("cleanupVerified"))
+                                       and cleanup.verified}
 
             # Release the shared in-use lock LAST, after teardown has finished.
             #

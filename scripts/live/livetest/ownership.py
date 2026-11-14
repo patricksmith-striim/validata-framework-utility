@@ -1173,7 +1173,9 @@ class Ledger:
                 try:
                     clear_own_checkpoints(ctx, checkpoint_ns, self)
                 except Exception as exc:    # noqa: BLE001
+                    # a leftover checkpoint moves where the next run of the same OP case resumes
                     self.gaps.append(f"op-checkpoint cleanup: {exc}")
+                    result.failures.append({"kind": "op-checkpoint", "name": checkpoint_ns, "error": str(exc)})
             self._verify_all([x for x in self.entries if x["attempt"] == mine and x["state"] == "deleted"],
                              result, targets, deadline)
             for pattern in file_globs:

@@ -858,8 +858,11 @@ def _wait(watch: Watch, observe, satisfied, terminal=None) -> tuple[str, object]
         clock.sleep(min(_poll_s(deadline), deadline.remaining()))
 
 
-def _hold(spec: LifecycleSpec, clock, observe, satisfied) -> tuple[dict, bool]:
-    """Stability: the satisfied condition must still hold after ``spec.stability_s``."""
+def _hold(spec: LifecycleSpec, clock, observe, satisfied, terminal) -> tuple[dict, str]:
+    """Stability: the satisfied condition must still hold after ``spec.stability_s``, and no app may
+    have reached a terminal status meanwhile (the status is read after the witness, the last read
+    before the assertions). Returns the record and ``satisfied``, ``stability-lost`` or
+    ``terminal-status:<status> (<app>)``; a status that cannot be read is ``stability-lost``."""
     started = clock.monotonic()
     if spec.stability_s > 0:
         clock.sleep(spec.stability_s)
@@ -868,8 +871,16 @@ def _hold(spec: LifecycleSpec, clock, observe, satisfied) -> tuple[dict, bool]:
     except Exception as e:              # noqa: BLE001
         value = {"error": str(e)}
     ok = not (isinstance(value, dict) and "error" in value) and satisfied(value)
-    return {"seconds": spec.stability_s, "measuredS": round(clock.monotonic() - started, 3),
-            "heldAt": clock.wall(), "value": value, "held": ok}, ok
+    record = {"seconds": spec.stability_s, "status": None}
+    try:
+        record["status"] = terminal(max(1.0, spec.stability_s))
+    except Exception as e:              # noqa: BLE001 - an unreadable status does not prove the app is up
+        record["statusError"] = f"{type(e).__name__}: {e}"
+    reason = ("stability-lost" if not ok or "statusError" in record
+              else f"terminal-status:{record['status']}" if record["status"] else "satisfied")
+    record.update({"measuredS": round(clock.monotonic() - started, 3), "heldAt": clock.wall(), "value": value,
+                   "held": reason == "satisfied"})
+    return record, reason
 
 
 def _statuses(client, apps, remaining: float) -> dict:
@@ -1110,8 +1121,7 @@ def smoke_and_ready(state: State, spec: LifecycleSpec, *, client, apps, admins, 
         reason, value = _wait(watch, observe, lambda v: v == want, terminal)
         witness = f"sink observed the positive source baseline {want}"
         if reason == "satisfied":
-            state.stability, held = _hold(spec, clock, observe, lambda v: v == want)
-            reason = reason if held else "stability-lost"
+            state.stability, reason = _hold(spec, clock, observe, lambda v: v == want, terminal)
     elif kind == "source-progress":
         probe = make_probe(_admin(admins, spec.readiness["db"]))
         slot = tokens.get("PG_SLOT", "")
@@ -1124,8 +1134,7 @@ def smoke_and_ready(state: State, spec: LifecycleSpec, *, client, apps, admins, 
         reason, value = _wait(watch, observe, lambda v: v is True, terminal)
         witness = f"replication slot {slot} active"
         if reason == "satisfied":
-            state.stability, held = _hold(spec, clock, observe, lambda v: v is True)
-            reason = reason if held else "stability-lost"
+            state.stability, reason = _hold(spec, clock, observe, lambda v: v is True, terminal)
     else:
         watch = Watch(kind, "ready sentinel inserted, observed present, deleted, observed absent", deadline)
         ids = getattr(state, "sentinel_ids", None) or {}
@@ -1135,8 +1144,7 @@ def smoke_and_ready(state: State, spec: LifecycleSpec, *, client, apps, admins, 
         reason = sentinel.run(watch, terminal)
         witness = f"ready sentinel {sentinel.id} observed present then absent"
         if reason == "satisfied":
-            state.stability, held = _hold(spec, clock, sentinel.count, lambda n: n == 0)
-            reason = reason if held else "stability-lost"
+            state.stability, reason = _hold(spec, clock, sentinel.count, lambda n: n == 0, terminal)
     state.ready = watch.finish(reason, witness)
     if reason != "satisfied":
         raise LifecycleError(f"lifecycle readiness {kind} failed: {reason}", state.ready, [smoke])
@@ -1204,8 +1212,7 @@ def complete(state: State, spec: LifecycleSpec, *, client, apps, admins, tokens,
         # stability re-reads the done sentinel's own id after the interval: it must still be absent
         observe, satisfied = sentinel.count, (lambda n: n == 0)
     if reason == "satisfied":
-        state.stability, held = _hold(spec, clock, observe, satisfied)
-        reason = reason if held else "stability-lost"
+        state.stability, reason = _hold(spec, clock, observe, satisfied, terminal)
     if reason != "satisfied" and kind == "row-count" and "key" in spec.completion:
         from livetest.diagnostics import read_keys
         diagnostic = {"stage": "completion-failure", "count": value}

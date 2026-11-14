@@ -136,8 +136,10 @@ present, deletes it, observes it absent. `${SENTINEL_TAG}` = `slt-<per_test>-<at
 No other row ever matches; insert-only targets cannot use it. `seed[].after` stays a delay.
 
 Records: `ready` / `completion` = `{kind, condition, witness, at, startedAt, endedAt, deadlineS,
-observations (last 50), reason}`; `stability` = `{seconds, heldAt, measuredS, value, held}` from
-a real re-read after the interval.
+observations (last 50), reason}`; `stability` = `{seconds, status, heldAt, measuredS, value, held}` from
+a real re-read after the interval, then a status read of every app: `status` names the first
+terminal one (`terminal-status:<status> (<app>)`), and an unreadable status is `statusError`
+and `stability-lost`.
 
 ## Ownership ledger and cleanup (`ownership.py`)
 
@@ -165,11 +167,15 @@ live engine dir), persisted before any side effect.
   before use, then deleted by exact owned name in the current attempt. Without an
   immutable incarnation identity, a prior-attempt replay cannot delete them.
 - **Unsupported kinds.** Other engine tables, GCS buckets and OP uploads remain
-  verification gaps; no computed-name or prefix drop is deletion authority.
+  verification gaps; no computed-name or prefix drop is deletion authority. A case without the
+  block still deletes them after the ledger cleanup, by this run's prefix (`teardown_unowned`);
+  each delete that fails is a cleanup failure (`unowned-teardown-failed: <kind> <name>: …`), not
+  only a gap.
 - **Inventories.** A docker check is `present`, `absent` or unreadable; unreadable refuses
   acquisition and is a failed verification read, never absence.
 - **Checkpoints** are deleted only by exact name when `<ns>.` is a whole component; every other
-  listed name is reported. Foreign objects are reported, never deleted.
+  listed name is reported. A listing or delete that fails is a cleanup failure (`op-checkpoint`): a
+  leftover checkpoint moves where the next run of the same case resumes. Foreign objects are reported, never deleted.
 - **Bounded cleanup.** Each delete and verification read has a per-operation bound inside a
   per-case deadline. Cleanup never raises: an unexpected error is `cleanup.status: failed` with
   detail `cleanup-error:…`, and a test's own failure is never replaced.

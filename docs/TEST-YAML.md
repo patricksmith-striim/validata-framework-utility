@@ -20,7 +20,7 @@ A test is a folder containing a `test.yaml` (this schema) plus whatever it refer
 | `deployment_groups` | list | no | — | owned initial worker groups and members added after deployment; Docker only |
 | `requires` | list[string] | no | `[]` | service names to provision/reuse (e.g. `postgres`, `oracle`, `mssql`, `kafka`, `spanner`, `gcs`; `teradata` and `servicenow` connect to your own instance, set with `SLT_TERADATA_HOST` / `SLT_SERVICENOW_HOST`) — each resolved once per session |
 | `tokens` | mapping | no | `{}` | manifest-declared `${NAME}` values, rendered wherever the harness renders tokens (TQL, DDL/seed, `server_files`, `assert` targets, `kafka_cleanup_topics`, `op.upload` names). Names match `[A-Z][A-Z0-9_]*`; values are strings (numbers are cast) and may not themselves contain `${...}`. A name the harness sets -- `NS`/`APP`/`APP_BARE`/`TID*`, the placement and `STRIIM_*` tokens, a module's `${<TOKEN>_JAR}`/`_NAME`, any service's `provides:` (e.g. `MSSQL_URL`), and the reserved `SENTINEL_*` / `SENTINEL_RECOVERY_*` prefixes -- is refused at load, so merge order never decides. Lets one shipped app serve several manifests that differ in a value (e.g. `TrailFilePattern: '${SRC_TRAIL}'`, `k10*` vs `t10*`) |
-| `kafka_cleanup_topics` | list[string] | no | `[]` | extra Kafka topics the test's **app** creates that the framework didn't derive itself — e.g. a persisted stream's derived `<ns>_<streamName>` data topic and its `<topic>_CHECKPOINT` companion. Each entry is `${...}`-token-rendered (embed `${NS}`/`${TID}` for per-test uniqueness) and appended to the same best-effort per-test topic delete that already removes the derived `${KAFKA_SRC_TOPIC}`/`${KAFKA_TGT_TOPIC}` at teardown. Requires `kafka` in `requires` (loader fails loud otherwise). Absent/empty (every test that doesn't set it) is a strict no-op |
+| `kafka_cleanup_topics` | list[string] | no | `[]` | extra Kafka topics the test's **app** creates that the framework didn't derive itself — e.g. a persisted stream's derived `<ns>_<streamName>` data topic and its `<topic>_CHECKPOINT` companion. Each entry is `${...}`-token-rendered (embed `${NS}`/`${TID}` for per-test uniqueness) and appended to the same per-test topic delete that already removes the derived `${KAFKA_SRC_TOPIC}`/`${KAFKA_TGT_TOPIC}` at teardown; a delete that fails fails the case's cleanup. Requires `kafka` in `requires` (loader fails loud otherwise). Absent/empty (every test that doesn't set it) is a strict no-op |
 | `ddl` | string \| list | no | none | schema setup, run once before seed/deploy. Plain string (or a bare list item) → the default `postgres-source` route. List form — entries in the same style `upload:`/`server_files:` use: `- file: <name>` plus an optional `db: <route>` (default `postgres-source`), applied in order. Routes are `<svc>-source`/`<svc>-target` (fixed `qasource`/`qatarget` schemas) plus the emulator routes (`spanner-*`, `gcs`, `kafka`) — see `SERVICES.md`. **Deprecated** (still parses, warns naming the file): the route-keyed entry `{source_db\|target_db: <route>, file: <name>}` — the route value already carries the direction; write `db:` |
 | `seed` | string \| list | no | none | data setup, same shape/back-compat as `ddl`, plus two per-entry keys `ddl` does not take: **`when`** (`pre_deploy` (default) \| `post_start` \| `post_recover`) and **`after`** — see below |
 | `setup` | mapping | no | none | tables the case creates before its DDL and deploy: `bigtable:` (a list of `{table, families, gc, seed, db}`), dropped at teardown unless kept — see the `setup` section |
@@ -1563,7 +1563,7 @@ lifecycle:
 | `sink` | **yes** | — | `db` (table), `file` (file) or `kafka` (topic) |
 | `readiness` | **yes** | — | `{kind: ..., ...}`: when the app is ready for the test's `post_start` data |
 | `completion` | **yes** | — | `{kind: ..., ...}`: when the app has finished |
-| `stability` | no | `5s` | how long the witnessed value must then stay unchanged; `500ms`, `5s`, `2m` or a number of seconds |
+| `stability` | no | `5s` | how long the witnessed value must then stay unchanged, with no app in a terminal status when it is re-read (`terminal-status:<status>`); `500ms`, `5s`, `2m` or a number of seconds |
 | `deadlines` | no | readiness `60s`, completion the test's `timeout` | `{readiness: ..., completion: ...}`, each greater than 0 |
 | `reset` | no | `owned` | `owned` only: the run removes exactly what it created |
 | `sentinel` | when a kind is `sentinel` | — | the sentinel's SQL and where to watch it (below); refused when no kind uses it |
@@ -1925,7 +1925,12 @@ satisfied or the manifest `timeout` expires.
 assert:
   smoke: true
 ```
-No specs — just asserts the app reaches and stays RUNNING through a short settle window.
+No specs — just asserts the app reaches RUNNING and is still RUNNING after a 1 s settle.
+
+After the last tier of every case, smoke-only included, the status of each app is read once more:
+CRASH, HALT, TERMINATED or DEPLOY_FAILED fails the case (`entered terminal status ... after the last
+assertion`). Under `expect_halt` this read is skipped. An app that exits after that read, while the
+case is being torn down, is not seen.
 
 ### `placement` — live flow ownership
 
@@ -2370,6 +2375,12 @@ Polls `SHOW <app> CHECKPOINT HISTORY;`. `nonempty` passes once a checkpoint is s
 reads until `timeout` and fails as soon as one is shown, so set `timeout` longer than the
 `RECOVERY` interval it must rule out. Use it to tell an app with a `RECOVERY` clause from one
 without.
+
+Only Striim's "not available yet" answer counts as no checkpoint. Any other failure (a syntax
+error, an app that does not exist), an HTTP error body or a response of another shape is a read
+error. `empty` fails on the first read error, and each of its reads must also read the app's
+status, so an empty history counts only for an app Striim shows. `nonempty` retries a read error
+and names it if `timeout` passes without a checkpoint.
 
 #### `predates` — prove a `recover:` case replayed a seed
 

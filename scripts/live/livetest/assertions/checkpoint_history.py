@@ -166,14 +166,28 @@ def assert_checkpoint_history(client, app: str, expected: str, timeout: int,
     checkpoint, or fails at the deadline -- a RECOVERY-clause app's first checkpoint lands on its
     own interval, not the instant the app reaches RUNNING. `empty` must hold for the whole
     `timeout`: it fails on the first read that shows a checkpoint and passes only at the
-    deadline, since an early empty read cannot tell a plain app from one not yet checkpointed."""
+    deadline, since an early empty read cannot tell a plain app from one not yet checkpointed.
+
+    A history that cannot be read is not an empty one. Under `empty` an unreadable read fails at
+    once, and each poll must also read the app's status: an empty history counts only for an app
+    the platform shows in the same poll. Under `nonempty` an unreadable read is retried and named
+    if the deadline passes without a checkpoint."""
+    from livetest.striim import StriimError, redact
     deadline = time.monotonic() + timeout
     rows: list = []
+    error = None
     while True:
         if status_probe:
             status_probe()
-        rows = client.checkpoint_history(app)
-        ok = bool(rows) if expected == "nonempty" else not rows
+        try:
+            rows, error = client.checkpoint_history(app), None
+            if expected == "empty":
+                status = client.current_status(app)
+                if not status:
+                    raise StriimError(f"the status of {app} read as {status!r}: the app is not shown")
+        except StriimError as e:
+            rows, error = [], redact(str(e))[:1024]
+        ok = bool(rows) if expected == "nonempty" else not rows and error is None
         if (ok if expected == "nonempty" else not ok) or time.monotonic() >= deadline:
             break
         if progress:
@@ -185,8 +199,11 @@ def assert_checkpoint_history(client, app: str, expected: str, timeout: int,
             time.sleep(poll)
     shown = "nonempty" if rows else "empty"
     detail = None if ok else (
+        f"SHOW {app} CHECKPOINT HISTORY unreadable, expected {expected}: {error}"
+        if expected == "empty" and error is not None else
         f"SHOW {app} CHECKPOINT HISTORY shows {shown} within {timeout}s, expected {expected}"
-        + (" for the whole timeout" if expected == "empty" else ""))
+        + (" for the whole timeout" if expected == "empty" else "")
+        + (f" (last read failed: {error})" if error is not None else ""))
     record = build_assertion_result(
         type="checkpoint_history", status="passed" if ok else "failed",
         spec={"checkpoint_history": expected}, target=app, db=None,

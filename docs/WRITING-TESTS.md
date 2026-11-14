@@ -263,7 +263,8 @@ half-copied target can match too early. The `lifecycle:` block makes the framewo
   this run, waits until it appears on the target, deletes it and waits until it is gone. At
   readiness this proves the reader is capturing. At completion, after `changes.sql`, it proves
   every change before it has arrived, because CDC keeps commit order.
-- `stability: 5s`: the target must then stay unchanged for five seconds.
+- `stability: 5s`: the target must then stay unchanged for five seconds, and the app must not
+  have crashed or halted in that time.
 - `reset: owned`: the framework removes only what this run created.
 
 The sentinel needs two small SQL files. Your table has `NOT NULL` columns, so fill them:
