@@ -13,7 +13,7 @@ import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from livetest import opjarrelease
+from livetest import jarinputs, opjarrelease
 
 from livetest import paths, stack
 
@@ -343,63 +343,26 @@ def _prune_store(store: Path, tag: str, keep: Path) -> None:
             pass
 
 
-_ADD_SOURCE_RE = re.compile(r"<source>\s*([^<]+?)\s*</source>")
+# The input set and its record live in jarinputs (byte-identical in both engines), so both decide
+# reuse from the same files: src/main, pom.xml, the parent poms, every add-sourced shared root.
+add_source_roots = jarinputs.add_source_roots
 
 
-def add_source_roots(module_dir: Path) -> list[Path]:
-    """Extra source roots this module's pom pulls in via build-helper `add-source`.
+def _source_record(jar: Path) -> Path:
+    return jarinputs.record_path(jar)
 
-    A shared library (OpenProcessorCommon, SampleCommon) is compiled INTO this module's
-    jar rather than depended on as one, so an edit there changes this artifact exactly
-    like an edit under src/ — and must trigger the same rebuild.
 
-    Read from the pom rather than hardcoded, so a new shared root is covered the moment
-    a module add-sources it, and only for the modules that actually do.
-    """
-    try:
-        text = (module_dir / "pom.xml").read_text()
-    except OSError:
-        return []
-    roots = []
-    for raw in _ADD_SOURCE_RE.findall(text):
-        resolved = raw.replace("${project.basedir}", str(module_dir))
-        if "${" in resolved:
-            # An unresolved property would silently resolve to a non-existent dir and
-            # scan nothing; skipping is equally wrong but at least not silent-by-design.
-            continue
-        path = Path(resolved)
-        if path.is_dir():
-            roots.append(path.resolve())
-    return roots
+def _write_source_record(jar: Path, module_dir: Path) -> None:
+    jarinputs.write_record(jar, module_dir, jarinputs.inputs(module_dir))
 
 
 def _stale_trigger(jar: Path, module_dir: Path) -> Path | None:
-    # Return the SOURCE that is newest-newer than the built jar (so a rebuild note can name
-    # what changed), or None when the jar is up to date. Rebuild if any source is newer —
-    # otherwise an edit to the OP's Java (without `mvn clean`) is silently ignored and the
-    # live suite uploads the OLD jar, reporting green over a real regression. Covers every
-    # file under src/main (java AND resources), pom.xml (a dependency/version/shade change
-    # alters the artifact), and every add-sourced shared root (see add_source_roots) —
-    # shared code compiles into this jar, so it is this module's source for staleness.
-    #
-    # src/test is deliberately EXCLUDED: tests are compiled but never packaged, so no edit
-    # there can change the jar's bytes, and including it made a test-only edit trigger a
-    # full rebuild that could not alter the artifact. Trade-off: the build's `-DskipTests`
-    # test COMPILE (which catches a Java-16+ construct in a test before it breaks a Java-11
-    # release build) no longer re-runs for a test-only edit — it fires on the next rebuild
-    # from any main/pom change, and in CI.
-    try:
-        jar_mtime = jar.stat().st_mtime
-    except FileNotFoundError:
-        return jar
-    srcs = [p for p in (module_dir / "src" / "main").rglob("*") if p.is_file()]
-    for root in add_source_roots(module_dir):
-        srcs.extend(p for p in root.rglob("*") if p.is_file())
-    pom = module_dir / "pom.xml"
-    if pom.exists():
-        srcs.append(pom)
-    newer = [p for p in srcs if p.stat().st_mtime > jar_mtime]
-    return max(newer, key=lambda p: p.stat().st_mtime) if newer else None
+    # Return the input that makes the jar stale (so a rebuild note can name what changed), or None
+    # when it is up to date. Rebuild on any change -- otherwise an edit (without `mvn clean`) is
+    # silently ignored and the live suite uploads the OLD jar, reporting green over a real
+    # regression. The inputs are what Maven builds the jar from (jarinputs); a deleted input is
+    # seen through the jar's source record, which mtimes cannot do.
+    return jarinputs.stale_trigger(jar, module_dir, jarinputs.inputs(module_dir))
 
 def _running_java_major(run=None) -> str | None:
     # Best-effort major version of whatever `java` the ambient JAVA_HOME/PATH resolves
@@ -677,7 +640,8 @@ def build_jar(module_ref: str, release: dict, run=None, report=None) -> BuiltArt
     """Build module_ref (a repo-relative module dir or its pom.xml) against `release`
     (a dict as returned by livetest.releases.resolve_release / detect_release) and return the resulting
     BuiltArtifact. A matching `*-<SERIES>.jar` is REUSED only when it is newer than every
-    module source AND its fingerprint sidecar records the same release; otherwise it is
+    input it is built from (jarinputs), its source record lists exactly those inputs, AND its
+    fingerprint sidecar records the same release; otherwise it is
     (re)built with the release env merged into the subprocess so each pom's `release-from-env`
     profile activates. A jar whose MANIFEST is stamped for a DIFFERENT release fails fast (asking
     for `mvn clean`); a jar with no stamp (built before the entries existed / by another toolchain)
@@ -765,6 +729,10 @@ def build_jar(module_ref: str, release: dict, run=None, report=None) -> BuiltArt
             except ValueError:
                 changed = trigger
             reason = f"source changed ({changed} is newer than {jar.name}) -> clean rebuild"
+            if trigger == _source_record(jar):
+                reason = f"no source record for {jar.name} -> clean rebuild"
+            elif jarinputs.is_removed(trigger, module_dir, jarinputs.inputs(module_dir)):
+                reason = f"source removed ({changed} was built into {jar.name}) -> clean rebuild"
     elif corrupt is not None:
         # The interrupted build that truncated the jar may have left target/classes
         # half-written too, and shade would fold those into a plain `package` -- only
@@ -859,6 +827,7 @@ def build_jar(module_ref: str, release: dict, run=None, report=None) -> BuiltArt
             f"clean rebuild, but this run resolves to {fingerprint}. The build is not "
             f"producing the release it was asked for -- check that STRIIM_RELEASE reaches "
             f"the pom in {module_dir}.")
+    _write_source_record(jar, module_dir)
     return BuiltArtifact(path=jar, name=jar.name, op_name=op_name_for(jar.name, suffix), origin="built")
 
 def upload_artifacts(ctx, files: list[Path], run=None, keep_existing: bool = False) -> None:

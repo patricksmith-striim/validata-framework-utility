@@ -39,9 +39,6 @@ def _fw_int(tmp):      # a framework-home-shaped target for shared settings disc
 SITES = [
     # PR-5
     ("importlib.import_module('inttest.opartifacts')._root()", "SLT_PROJECT_ROOT", REPO, lambda t: t, None),
-    ("importlib.import_module('inttest.opartifacts')._common_dir()", "SLT_PROJECT_ROOT",
-     REPO / "java" / "OpenProcessors" / "OpenProcessorCommon",
-     lambda t: t / "java" / "OpenProcessors" / "OpenProcessorCommon", None),
     (_mod("inttest.harness", "_JAVA_DIR"), "SLT_FRAMEWORK_HOME", INT / "java",
      lambda t: t / "integration" / "java", _fw_int),   # _fw_int makes integration/inttest
     # PR-6

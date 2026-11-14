@@ -69,6 +69,7 @@ def test_build_jar_reuses_when_up_to_date(tmp_path, monkeypatch):
     _touch(mod / "pom.xml", 1000)
     jar = mod / "target" / "ExampleMapOpV8G-5.4.jar"
     _jar(jar, fp=_fp(RELEASE_54), major=61)   # a real (readable) jar -- a text stand-in
+    opartifacts._write_source_record(jar, mod)
     os.utime(jar, (2000, 2000))               # would now correctly count as corrupt
     calls = []
     built = build_jar(MODULE, RELEASE_54, run=lambda argv, cwd, env: calls.append(argv))
@@ -245,6 +246,7 @@ def test_build_jar_still_reuses_a_valid_jar_with_no_stamp_and_no_own_classes(tmp
     jar.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(jar, "w") as z:
         z.writestr("com/other/Dep.class", b"x")   # valid zip, nothing determinable
+    opartifacts._write_source_record(jar, mod)
     os.utime(jar, (2000, 2000))                   # newer than every source
     build_jar(MODULE, RELEASE_54, run=lambda *a: pytest.fail("must not build"))
 
@@ -276,6 +278,7 @@ def test_build_jar_reuses_when_manifest_matches(tmp_path, monkeypatch):
     _touch(mod / "src/main/java/X.java", 1000)
     jar = mod / "target" / "ExampleMapOpV8G-5.4.jar"
     _jar(jar, fp=_fp(RELEASE_54), major=61)
+    opartifacts._write_source_record(jar, mod)
     os.utime(jar, (2000, 2000))            # newer than source
     calls = []
     build_jar(MODULE, RELEASE_54, run=lambda argv, cwd, env: calls.append(argv))
@@ -341,6 +344,7 @@ def test_build_jar_absent_manifest_reused_when_bytecode_matches(tmp_path, monkey
     _touch(mod / "src/main/java/X.java", 1000)
     jar = mod / "target" / "ExampleMapOpV8G-5.4.jar"
     _jar(jar, major=61)                    # no manifest stamp, Java-17 bytecode
+    opartifacts._write_source_record(jar, mod)
     os.utime(jar, (2000, 2000))
     calls = []
     build_jar(MODULE, RELEASE_54, run=lambda argv, cwd, env: calls.append(argv))
@@ -393,6 +397,7 @@ def test_build_jar_reports_reason_on_stale_rebuild(tmp_path, monkeypatch):
     _jar(jar, fp=_fp(RELEASE_54), major=61)
     os.utime(jar, (1000, 1000))
     _touch(mod / "src/main/java/X.java", 3000)     # source newer than jar -> stale
+    opartifacts._write_source_record(jar, mod)
     reasons = []
     def fake_run(argv, cwd, env):
         jar.write_text("rebuilt"); return types.SimpleNamespace(returncode=0, stdout="", stderr="")
@@ -421,6 +426,7 @@ def test_build_jar_does_not_report_on_reuse(tmp_path, monkeypatch):
     _touch(mod / "src/main/java/X.java", 1000)
     jar = mod / "target" / "ExampleMapOpV8G-5.4.jar"
     _jar(jar, fp=_fp(RELEASE_54), major=61)
+    opartifacts._write_source_record(jar, mod)
     os.utime(jar, (2000, 2000))                    # newer than source -> reuse
     reasons = []
     build_jar(MODULE, RELEASE_54, run=lambda *a: pytest.fail("must not build"), report=reasons.append)
@@ -736,6 +742,7 @@ def test_stale_trigger_fires_when_an_add_sourced_shared_file_changes(tmp_path):
     mod = _module_with_shared_roots(tmp_path)
     jar = mod / "target" / "ExampleMapOpV8G-5.4.jar"
     _touch(jar, 2000)
+    opartifacts._write_source_record(jar, mod)
     shared = tmp_path / "java/SampleCommon/src/main/java/com/example/common/WAEvents.java"
     _touch(shared, 3000)                            # newer than the jar
     trigger = opartifacts._stale_trigger(jar, mod)
@@ -746,6 +753,7 @@ def test_stale_trigger_fires_for_openprocessorcommon_too(tmp_path):
     mod = _module_with_shared_roots(tmp_path)
     jar = mod / "target" / "ExampleMapOpV8G-5.4.jar"
     _touch(jar, 2000)
+    opartifacts._write_source_record(jar, mod)
     _touch(mod.parent / "OpenProcessorCommon/src/main/java/Shared.java", 3000)
     trigger = opartifacts._stale_trigger(jar, mod)
     assert trigger is not None and trigger.name == "Shared.java"
@@ -756,7 +764,29 @@ def test_stale_trigger_still_none_when_shared_roots_are_older(tmp_path):
     mod = _module_with_shared_roots(tmp_path)
     jar = mod / "target" / "ExampleMapOpV8G-5.4.jar"
     _touch(jar, 5000)                               # newer than every source
+    opartifacts._write_source_record(jar, mod)
     assert opartifacts._stale_trigger(jar, mod) is None
+
+
+def test_stale_trigger_sees_a_deleted_source_and_an_edited_parent_pom(tmp_path):
+    # Mtimes cannot see a deleted file, and the parent pom a module inherits from is an input
+    # to its build: the jar's source record and the <parent> chain cover both.
+    mod = tmp_path / "java" / "Ops" / "FooOp"
+    keep, gone = mod / "src/main/java/Keep.java", mod / "src/main/java/Gone.java"
+    parent = tmp_path / "java" / "pom.xml"
+    for p in (keep, gone, parent):
+        _touch(p, 1000)
+    _touch(mod / "pom.xml", 1000, "<project><parent><relativePath>../../pom.xml</relativePath></parent></project>")
+    jar = mod / "target" / "FooOp-5.4.jar"
+    _touch(jar, 1000, "jar")
+    opartifacts._write_source_record(jar, mod)
+    os.utime(jar, (2000, 2000))
+    assert opartifacts._stale_trigger(jar, mod) is None
+    gone.unlink()                                             # a class removed from the module
+    assert opartifacts._stale_trigger(jar, mod) == gone
+    _touch(gone, 1000)
+    _touch(parent, 3000, "new dependency version")            # the parent pom edited
+    assert opartifacts._stale_trigger(jar, mod) == parent.resolve()
 
 # ---- place_on_agent ---------------------------------------------------------
 #

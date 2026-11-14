@@ -184,8 +184,9 @@ stops or tears down a container, and skips this session check, since concurrency
 
 **The integration and perf tiers run `mvn` in the module under test**, because a tier that drove a
 stale jar would report green over a real regression (`opartifacts.py` rebuilds whenever anything
-under the module's `src/main`, its `pom.xml`, or a shared source folder it compiles in is newer than the
-jar). So a tier in flight and a packaging build in another shell are two Maven builds in one
+under the module's `src/main`, its `pom.xml`, a parent pom it inherits from, or any source root its pom
+add-sources (`OpenProcessorCommon`, `FieldCommon`, ...) is newer than the jar, or was deleted since the
+build; `jarinputs.py`, shared with the live engine, lists those inputs). So a tier in flight and a packaging build in another shell are two Maven builds in one
 module directory, and one of them deletes `target/` while the other is compiling.
 
 **It breaks in BOTH directions, and neither failure names the cause.**

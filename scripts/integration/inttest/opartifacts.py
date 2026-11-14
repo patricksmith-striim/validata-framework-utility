@@ -13,16 +13,16 @@ pom.xml) -- never a versioned jar path. The release (detected from STRIIM_HOME b
 shaded jar's finalName (`${artifactId}-${STRIIM_SERIES}.jar`); we glob for that rather
 than hardcoding a name, so the same code builds every gold OP.
 
-**The OpenProcessorCommon staleness fold (SPEC §8's "build-staleness gotcha").** The
+**Shared source roots in the staleness check (SPEC §8's "build-staleness gotcha").** The
 shared contracts (`EventProcessor`, `Logger`, `TypeResolver`, ...) are add-source'd from
 `java/OpenProcessors/OpenProcessorCommon/src/main/java` into EVERY op's own build and
 shaded into its single output jar -- they compile as if they were the op's own sources,
 but they live outside the op's `src/` tree. If `_stale_trigger` only looked at the op's
 own `src/**` + `pom.xml`, editing a shared interface would leave every dependent op's
-jar's mtime untouched and stale, so a real regression would be silently built over. We
-fix this the simplest-correct way: `_stale_trigger` ALWAYS folds `OpenProcessorCommon`'s
-own `src/**` mtimes into the comparison for every module (not just ones we know add-source
-it) -- see the module docstring for `_stale_trigger` below.
+jar's mtime untouched and stale, so a real regression would be silently built over. So
+the staleness inputs (`_sources`) are what `jarinputs` reads from the module's pom, exactly
+as the live engine does: every root it add-sources (OpenProcessorCommon, FieldCommon, ...)
+and the parent poms it inherits from -- see `_sources` below.
 """
 from __future__ import annotations
 
@@ -32,7 +32,7 @@ import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from inttest import opjarrelease
+from inttest import jarinputs, opjarrelease
 
 from inttest import paths
 
@@ -44,10 +44,6 @@ def _root() -> Path:
     except ImportError:
         return paths.project_root()
     return _project.example_root()
-
-
-def _common_dir() -> Path:
-    return _root() / "java" / "OpenProcessors" / "OpenProcessorCommon"
 
 
 class OpArtifactError(Exception):
@@ -130,73 +126,35 @@ def jar_module_name(path) -> str:
     return m.group(1) if m else ""
 
 
-def _files_under(directory: Path) -> list[Path]:
-    return [p for p in directory.rglob("*") if p.is_file()] if directory.is_dir() else []
-
-
 def _stale_trigger(jar: Path, module_dir: Path) -> Path | None:
     # Return the SOURCE that is newest-newer than the built jar (so a rebuild note can
     # name what changed), or None when the jar is up to date. Rebuild if any source is
     # newer -- otherwise an edit (without `mvn clean`) is silently ignored and this tier
-    # would drive the OLD jar, reporting green over a real regression. Covers every file
-    # under the module's own src/ (java AND resources) plus its pom.xml (a
-    # dependency/version/shade change alters the artifact) -- AND, per SPEC §8's
-    # "build-staleness gotcha", every file under OpenProcessorCommon's src/ tree, which
-    # is add-source'd into (and shaded into the single jar of) every op, module docstring
-    # above. We fold Common's tree in unconditionally rather than only for ops we know
-    # declare the add-source plugin execution: it is the simplest approach that is
-    # correct for every current AND future op that depends on Common, and the cost is
-    # cheap (Common is a small module) -- a false-positive rebuild trigger for an op that
-    # somehow does NOT depend on Common is harmless (mvn package is a no-op rebuild),
-    # whereas a false negative (missing a real dependency) silently ships a stale jar.
-    # The one module exempted is Common itself -- its own build already covers its own
-    # tree, and folding it in again is a no-op.
+    # would drive the OLD jar, reporting green over a real regression. The inputs are
+    # `_sources`: what Maven builds the jar from.
     #
     # Mtimes cannot see a DELETED source, so the jar's source record (`_source_record`) is
     # compared too: a missing record, or a recorded path that is gone, returns a path that is not
     # a current source, which `build_jar` answers with a clean rebuild.
-    try:
-        jar_mtime = jar.stat().st_mtime
-    except FileNotFoundError:
-        return jar
-    srcs = _sources(module_dir)
-    record = _source_record(jar)
-    try:
-        recorded = set(record.read_text().splitlines())
-    except OSError:
-        return record
-    names = {p: os.path.relpath(p, module_dir) for p in srcs}
-    removed = sorted(recorded - set(names.values()))
-    if removed:
-        return module_dir / removed[0]
-    newer = [p for p in srcs if p.stat().st_mtime > jar_mtime or names[p] not in recorded]
-    return max(newer, key=lambda p: p.stat().st_mtime) if newer else None
+    return jarinputs.stale_trigger(jar, module_dir, _sources(module_dir))
 
 
 def _sources(module_dir: Path) -> list[Path]:
-    # src/test is deliberately EXCLUDED: tests are compiled but never packaged, so no edit
-    # there can change the jar's bytes, and including it made a test-only edit trigger a
-    # full rebuild that could not alter the artifact. Trade-off: the build's `-DskipTests`
-    # test COMPILE (which catches a Java-16+ construct in a test before it breaks a Java-11
-    # release build) no longer re-runs for a test-only edit — it fires on the next rebuild
-    # from any main/pom change, and in CI.
-    srcs = _files_under(module_dir / "src" / "main")
-    pom = module_dir / "pom.xml"
-    if pom.exists():
-        srcs.append(pom)
-    common = _common_dir()
-    if module_dir.resolve() != common.resolve():
-        srcs.extend(_files_under(common / "src" / "main"))
-    return srcs
+    # jarinputs.inputs: src/main (src/test is excluded, see there), pom.xml, the parent poms it
+    # inherits from, and every root the pom add-sources (OpenProcessorCommon, FieldCommon, ...),
+    # read from the pom as the build reads it. It is the same set the live engine uses, and
+    # both engines read and write the same `.sources` record beside the jar, so it must stay the
+    # same set: a module whose inputs differed between engines would rebuild every time the
+    # other engine had built it.
+    return jarinputs.inputs(module_dir)
 
 
 def _source_record(jar: Path) -> Path:
-    return jar.with_name(jar.name + ".sources")
+    return jarinputs.record_path(jar)
 
 
 def _write_source_record(jar: Path, module_dir: Path) -> None:
-    names = sorted(os.path.relpath(p, module_dir) for p in _sources(module_dir))
-    _source_record(jar).write_text("".join(n + "\n" for n in names))
+    jarinputs.write_record(jar, module_dir, _sources(module_dir))
 
 
 def _running_java_major(run=None) -> str | None:
@@ -545,10 +503,8 @@ def build_jar(module_ref: str, release: dict, run=None, report=None) -> BuiltArt
             # Built by an older framework or by hand: what it was built from is unknown.
             clean = True
             reason = f"no source record for {jar.name} -> clean rebuild"
-        elif os.path.relpath(trigger, module_dir) not in {
-                os.path.relpath(p, module_dir) for p in _sources(module_dir)}:
+        elif jarinputs.is_removed(trigger, module_dir, _sources(module_dir)):
             # A removed source's class or resource stays in target/classes; only clean drops it.
-            # By exact name, not exists(): a case-only rename still "exists" on macOS.
             clean = True
             reason = f"source removed ({changed} was built into {jar.name}) -> clean rebuild"
     elif corrupt is not None:

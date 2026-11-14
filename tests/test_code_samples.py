@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from livetest import manifest, opartifacts, opjarrelease, releases
+from livetest import jarinputs, manifest, opartifacts, opjarrelease, releases
 
 _REPO = Path(__file__).resolve().parents[1]
 
@@ -62,7 +62,7 @@ def test_module_and_its_shared_sources_live_in_the_sample(sample, case, kind, _j
     # The poms add-source shared libraries by relative path (../../SampleCommon, and for the
     # OP ../OpenProcessorCommon). add_source_roots drops a root that does not exist, so
     # compare against the pom's own add-source count: every one must resolve, inside the sample.
-    declared = [s for s in opartifacts._ADD_SOURCE_RE.findall((module_dir / "pom.xml").read_text())
+    declared = [s for s in jarinputs._ADD_SOURCE_RE.findall((module_dir / "pom.xml").read_text())
                 if s.startswith("${project.basedir}")]
     roots = opartifacts.add_source_roots(module_dir)
     assert len(roots) == len(declared) > 0, (declared, roots)

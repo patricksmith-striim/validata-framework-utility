@@ -246,8 +246,10 @@ assert:
 
 `inttest/plugin.py` collects each `test.yaml` (`pytest_collect_file` → `IntYamlFile`/`IntYamlItem`),
 `mvn package`s the module jar if it is missing, built against a different Striim release, or
-older than its sources (a deleted source counts: the jar's `.sources` record beside it lists what it
-was built from, and a missing record forces a clean rebuild),
+older than its sources: its `src/main`, its `pom.xml`, the parent poms it inherits from and every source
+root its pom add-sources, such as `OpenProcessorCommon` or `FieldCommon` (a deleted source counts: the
+jar's `.sources` record beside it lists what it was built from, and a missing record forces a clean
+rebuild; the live tier decides from the same inputs and record),
 provisions/resets any `requires:` services, then runs the shared Java harness
 (`java/`, `com.striim.testing.inttest.IntegrationProcessor`) as a subprocess. The harness loads the jar
 in a child classloader, reflectively constructs the op's `Processor` via its canonical
