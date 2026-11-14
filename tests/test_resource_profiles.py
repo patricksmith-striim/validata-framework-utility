@@ -91,6 +91,7 @@ def _tracked(tier: str) -> dict:
     return tracked
 
 
+@pytest.mark.git_checkout
 @pytest.mark.parametrize("tier", ["live", "integration"])
 def test_every_shipped_profile_selects_and_passes_preflight(tier, monkeypatch):
     monkeypatch.setattr(subprocess, "run", _REAL_RUN)        # one read-only `git ls-files`

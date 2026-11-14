@@ -631,6 +631,16 @@ if SC.get("tx_close_fail"):                                # a transactions: poo
 I.resolve_service = resolve_service
 L._pg_connect = lambda **kw: FakeConn(kw["user"])
 L.status_bounded = lambda client, app, remaining: client.current_status(app)
+if not SC.get("hang_probe"):
+    # A fake statement returns at once, but a lifecycle wait's last pass before its deadline can
+    # hand the probe a few hundredths of a second; on a loaded host the probe thread starts later
+    # than that, the statement "completes after the deadline", and the outcome is cancel-failed
+    # instead of deadline. Only a hanging probe needs the real budget: every other one gets at
+    # least PROBE_FLOOR_S. The deadline itself is unchanged, so the outcome still is.
+    PROBE_FLOOR_S = 10.0
+    _real_probe_call = L.PgProbe._call
+    L.PgProbe._call = lambda self, sql, params, remaining, fetch, read=None: _real_probe_call(
+        self, sql, params, max(float(remaining), PROBE_FLOOR_S), fetch, read)
 O._docker = docker
 O._nodes = lambda: ("slt-striim",)
 '''

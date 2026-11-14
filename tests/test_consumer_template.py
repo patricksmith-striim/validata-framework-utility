@@ -78,6 +78,7 @@ def test_template_ships_its_files():
     assert len(pin) == 40 or pin.startswith("v"), pin
 
 
+@pytest.mark.git_checkout
 def test_template_pin_names_a_commit_of_this_repository():
     # A tag is cut by tools/release.py; a commit must be in this history. Either way a new
     # consumer's first sync can find it.

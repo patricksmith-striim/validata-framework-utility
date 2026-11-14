@@ -295,6 +295,7 @@ def test_untracked_files_are_refused_and_notes_are_never_read_from_the_tree(repo
     assert "draft.md" not in git(repo, "show", "--name-only", "--format=", "HEAD")
 
 
+@pytest.mark.git_checkout
 def test_every_runtime_version_literal_in_this_repo_is_one_the_tool_moves():
     """A new `__version__ = "..."` anywhere in the engines must be added to RUNTIME_VERSIONS."""
     tracked = subprocess.run(["git", "-C", str(REPO), "ls-files", "*.py"], capture_output=True, text=True).stdout.split()

@@ -82,6 +82,10 @@ workflow, these commands and `tools/release.py` the same.
 On a Linux test host with user systemd, prefix each Python command with
 `systemd-run --user --scope -q -p MemoryMax=4G -p MemorySwapMax=0` to cap its memory.
 
+A few tests read this repository's git history or index (marked `git_checkout` in the root suite).
+In a copy that is not a git checkout, such as a `git archive` export, they skip and say why; run
+them in a checkout before a release.
+
 The framework's own live tests (`scripts/live/regression/`) need Striim and Docker:
 [docs/internals/ENGINE.md](docs/internals/ENGINE.md), "Running it with pytest".
 
