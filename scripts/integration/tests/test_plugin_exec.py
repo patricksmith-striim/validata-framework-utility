@@ -245,3 +245,21 @@ def test_each_case_is_recorded_for_incremental_certification(pytester, monkeypat
     assert [(j["module"], j["origin"]) for j in item["jars"]] == [("java/OpenProcessors/X", "unknown")]
     assert "SLT_CASE_RECORDS" in session["envNames"]
     assert end["exitstatus"] == (0 if status == "passed" else 1)
+
+
+@pytest.mark.parametrize("input_text", ["[]", "  [ ]\n"])
+def test_a_data_case_whose_input_has_no_events_fails_without_driving(pytester, monkeypatch, tmp_path,
+                                                                     input_text):
+    """`input: []` with `match: []` compared an operator that was never fed with nothing, and passed."""
+    _, failure, events = run_case(pytester, monkeypatch, tmp_path, DATA_CASE, {"returns": []},
+                                  {"in.json": input_text, "out.json": "[]"})
+    assert failure is not None and "assert.data[0].input in.json has no events" in failure, failure
+    assert "drive" not in [e["event"] for e in events]
+
+
+def test_a_data_case_may_expect_no_output_from_real_input(pytester, monkeypatch, tmp_path):
+    """An operator that filters everything: an empty `match` with events in `input` stays legal."""
+    _, failure, events = run_case(pytester, monkeypatch, tmp_path, DATA_CASE, {"returns": []},
+                                  {"in.json": json.dumps([EVENT]), "out.json": "[]"})
+    assert failure is None, failure
+    assert [e["event"] for e in events] == ["drive"]

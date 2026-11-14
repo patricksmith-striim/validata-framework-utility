@@ -201,7 +201,8 @@ stayed still, compares the target with `expected/rows.csv` row by row, and clean
 | 5 | nothing was selected |
 
 When a run has several outcomes, it exits with the first of 2, 4, 1, 3: a failed test beside a
-skipped one exits 1.
+skipped one exits 1. A tier that selected nothing beside one that passed exits 0, and the console
+says `<tier>: no tests selected` for it.
 
 ## 6. Read the result
 

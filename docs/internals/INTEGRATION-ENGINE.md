@@ -165,6 +165,13 @@ mid-run leaves the file on disk with the lock free, and the next run proceeds. T
 "remove the stale lock" step, and there must never be one — see
 `test_session_guard_cannot_strand_future_runs_with_a_stale_file`.
 
+**The hermetic suite does not take it.** A session whose `-m` expression can select no
+`integration` or `docker` item (the suite's own `-m 'not integration and not docker'`) touches no
+service, so `scripts/integration/conftest.py` points `SLT_STATE_DIR` at a temporary directory and
+drops `SLT_FRAMEWORK_HOME` and `INT_STACK_PREFIX` before the plugin's `pytest_configure` runs. A
+unit run therefore neither waits for nor blocks a real session in the state directory the shell
+names, and leaves no lock files there. Any other expression, or none, is a real session.
+
 Parallelism *within* one session is fine and is what `SLT_PARALLEL=1 -n N` is for — xdist workers
 share the controller's session and each test gets a unique `${TID}`. A variants case is one item
 per `_variant_groups` group (`IntYamlFile.collect`, `_group_items`): each item drives its group,

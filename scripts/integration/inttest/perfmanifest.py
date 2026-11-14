@@ -6,7 +6,7 @@ into the regression tree's `scripts/integration/regression/{op,udf}/<name>/<case
 test.yaml`. A perf `test.yaml` is STRUCTURALLY IDENTICAL to a regression `test.yaml`
 (`inttest.manifest.load_manifest`) except `assert:` is replaced by `performance:`
 (PERF_SPEC.md §3) -- every other key (`name:`/`op:`/`properties:`/`purpose:`/
-`requires:`/`ddl:`/`seed:`/`timeout:`/`disabled:`/`types:`/`password_properties:`)
+`requires:`/`ddl:`/`seed:`/`disabled:`/`types:`/`password_properties:`)
 means exactly the same thing and is validated by the exact same normalizers, so
 authoring a perf test.yaml is: copy an existing regression `test.yaml`, delete
 `assert:`, add `performance:`. There is no config reuse/pointer to a regression
@@ -21,10 +21,9 @@ filesystem access beyond reading the one file handed to it. `assert:` is REJECTE
 as an unknown key (it's `performance:`'s job now); the resulting
 `manifest.TestManifest` gets a permissive placeholder (`AssertSpec(data=[],
 smoke=True)`) satisfying its shape, since no perf-mode consumer ever reads
-`.assert_`. `timeout:` is accepted, for the same schema-parity reason as every
-other key, even though nothing in perf mode reads `TestManifest.timeout` --
-`performance.timeout` is the field that actually governs a measured iteration's
-budget; the two are unrelated and both can coexist harmlessly.
+`.assert_`. A top-level `timeout:` is REFUSED: nothing in perf mode reads
+`TestManifest.timeout`, and `performance.timeout` is the field that governs a measured
+iteration's budget, so an author who wrote `timeout: 5` at the top changed nothing.
 """
 from __future__ import annotations
 
@@ -38,7 +37,8 @@ from . import manifest as manifest_mod
 
 # Every key inttest.manifest.load_manifest accepts EXCEPT `assert:` (replaced by
 # `performance:`, added separately below): the regression loader's own set, so the two tiers
-# accept the same keys. Two of them mean something particular here:
+# accept the same keys -- except a top-level `timeout:`, which load_perf_manifest refuses before
+# this check (`performance.timeout` bounds an iteration). Two of them mean something particular here:
 #
 # `variants` is §85.1's first axis: the perf tier ran on PostgreSQL alone, so it could not rank a
 # change whose cost is engine-specific -- MERGE against ON CONFLICT, range locks
@@ -374,8 +374,8 @@ def load_perf_manifest(path) -> PerfManifest:
     handed to it -- matching `inttest.manifest.load_manifest`'s documented policy.
 
     Structurally identical to `inttest.manifest.load_manifest` except `assert:` is
-    rejected (as an unknown key) and `performance:` is required instead --
-    `name`/`op`/`properties`/`purpose`/`requires`/`ddl`/`seed`/`timeout`/
+    rejected (as an unknown key), a top-level `timeout:` is refused, and `performance:` is
+    required instead -- `name`/`op`/`properties`/`purpose`/`requires`/`ddl`/`seed`/
     `disabled`/`types`/`password_properties` are all normalized via
     `inttest.manifest`'s own private functions, so this file's `properties:`/
     `op:`/etc. validate byte-identically to a regression `test.yaml`'s. Those
@@ -396,6 +396,10 @@ def load_perf_manifest(path) -> PerfManifest:
         raise PerfManifestError(f"{path}: manifest is empty")
     if not isinstance(raw, dict):
         raise PerfManifestError(f"{path}: top level must be a mapping, got {type(raw).__name__}")
+    if "timeout" in raw:
+        raise PerfManifestError(
+            f"{path}: top-level 'timeout' is not read in a perf case -- a measured iteration is "
+            f"bounded by 'performance.timeout' (default {DEFAULT_TIMEOUT} s); move it there")
     if "setup" in raw:
         raise PerfManifestError(
             f"{path}: top-level 'setup' is not read in a perf case -- a perf iteration creates no "
@@ -500,7 +504,6 @@ def load_perf_manifest(path) -> PerfManifest:
             requires=manifest_mod._normalize_requires(raw.get("requires"), path),
             ddl=manifest_mod._normalize_file_specs(raw.get("ddl"), "ddl", perf_dir, path),
             seed=manifest_mod._normalize_file_specs(raw.get("seed"), "seed", perf_dir, path),
-            timeout=manifest_mod._normalize_timeout(raw.get("timeout"), path),
             disabled=manifest_mod._normalize_disabled(raw.get("disabled"), path),
             types=manifest_mod._normalize_types(raw.get("types"), path),
             password_properties=password_properties,

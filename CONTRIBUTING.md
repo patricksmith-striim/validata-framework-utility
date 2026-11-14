@@ -58,7 +58,8 @@ export PYTHONNOUSERSITE=1 PYTHONDONTWRITEBYTECODE=1 DOCKER_HOST=unix:///nonexist
 
 The recovery cases commit copies of one reviewed CSV. After changing
 `samples/live/14-progress-recovery/expected/rows.csv`, run
-`python3 tools/prepare-recovery-goldens.py --write`; without `--write` it checks the copies.
+`python3 tools/prepare-recovery-goldens.py --write`; without `--write` it checks that the source is
+`(n, row-n)` for n=1..5000 and that every copy equals it.
 
 Run the suites for whatever you touch. These framework tests use pytest directly; use `striim-test` when running app cases.
 

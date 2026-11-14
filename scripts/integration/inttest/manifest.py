@@ -1535,7 +1535,12 @@ _ASSERTABLE_METRICS = {
 #: carries counts (window counts, close reasons, ignored rows by code) beside clocks (commit ms,
 #: idle %) in one object, so an exact string could never be asserted and the counts would go
 #: unread. A case names the counts and leaves the clocks out.
-_SUBSET_METRICS = {"ADAPTER_BASIC"}
+_SUBSET_METRICS = {
+    "ADAPTER_BASIC",
+    # The same kind of object: ADAPTER_DETAIL is an adapter's detailed figures; SpannerWriter's
+    # LAST_BATCH_INFO and DATABASE_WRITE_INFO describe its last batch and its last commit.
+    "ADAPTER_DETAIL", "LAST_BATCH_INFO", "DATABASE_WRITE_INFO",
+}
 
 #: MON metrics a case may NOT assert: they are CLOCKS. A case asserting a latency or a timestamp
 #: is measuring the machine it runs on, which is the same mistake §6.1a refuses for performance --
@@ -1545,6 +1550,8 @@ _CLOCK_METRICS = {
     # §156. An AGE is a clock measured from a clock -- asserting "0.003 seconds since the last
     # write" is asserting how fast this machine ran. Published for a human, never assertable.
     "LAST_WRITE_AGE",
+    # SpannerWriter's millis spent committing the last batch.
+    "TIME_TAKEN_FOR_MERGE",
 }
 
 #: MON metrics whose SHAPE is assertable but whose values are clocks: `COMMIT_LAG` is

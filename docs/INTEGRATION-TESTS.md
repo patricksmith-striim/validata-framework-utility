@@ -98,7 +98,8 @@ assert:
 
 A perf case is a separate `test.yaml` in a parallel `perf/` tree beside your integration cases,
 with `performance:` in place of `assert:`. It replays the input at increasing sizes and reports
-throughput, CPU and memory; `--perf-json PATH` writes the report as JSON. The full specification is
+throughput, CPU and memory; `--perf-json PATH` writes the report as JSON. A top-level `timeout:` is
+refused there: `performance.timeout` bounds each measured iteration. The full specification is
 [internals/PERF_SPEC.md](internals/PERF_SPEC.md).
 
 # Reference
@@ -147,13 +148,17 @@ operator constructs and runs. `matrix:` and `variants:` are described below.
 the keys allowed, and `striim-test doctor --case` reports it. A misspelt `matrix:`, `requires:`,
 `timeout:` or `disabled:` is an error, not a case that runs once, without its services, with the
 default timeout or while meant to be disabled. A perf case follows the same rule, with
-`performance:` in place of `assert:` and without `setup:`, which it would not read.
+`performance:` in place of `assert:` and without `setup:`, which it would not read; it also refuses a top-level `timeout:`,
+which nothing in a perf run reads (`performance.timeout` bounds a measured iteration).
 
 **`assert.data` is exact, and strict about JSON types.** Values compare by JSON category: boolean,
 integer, decimal and string. `true` is not `1`, and `5.0` is not `5`. Decimals compare by exact
 value, never through a float, and scale is ignored, so `1.50` equals `1.5`. The Java numeric width
 is not compared: the harness writes an `Integer`, a `Long` and a `BigInteger` all as a JSON integer,
 and a `Double` and a `BigDecimal` both as a JSON decimal.
+Its `input` must hold at least one event: a case whose input is empty fails, because the operator
+is never fed and an empty `match` would pass on that alone. An empty `match` beside real input is
+legal: it says the operator filtered everything.
 
 **`types:`** declares the source schema for each `metadata.TableName` an operator will see:
 column names, in the order they occupy `data[]`/`before[]`. The harness mints a type UUID per

@@ -620,6 +620,10 @@ def run_tier(ctx: Ctx, tier: str, path: Path, *, label: str, cases=(), collect_o
             _say(line)
     if code == OK and not collect_only:
         _say(f"{label}: {reason} (exit {code}) [logs: {tier_dir}]")
+    if code == NO_TESTS and not collect_only:
+        # Beside a passing tier the run exits 0 (errors.aggregate), so this line is the only
+        # sign on the console that a whole tier ran nothing.
+        _say(f"{label}: no tests selected ({reason}) [logs: {tier_dir}]")
     if code not in (OK, NO_TESTS):
         detail = ""
         if reason == "provenance-violation":

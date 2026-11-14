@@ -2076,11 +2076,20 @@ class IntYamlItem(pytest.Item):
                     props.update(overrides or {})
                     # Named in every failure, so a mismatch says WHICH run made it.
                     at = _run_label(None, overrides)
-                    for spec in m.assert_.data:
+                    for index, spec in enumerate(m.assert_.data):
                         if m.source is None:
                             raw_input = Path(spec.input_path).read_text()
                             rendered_input = tokens_mod.render(raw_input, self.tokens)
                             input_events = waevent_mod.load(rendered_input)
+                            if not input_events:
+                                # An operator fed nothing emits nothing, so an empty `match` would
+                                # pass without the operator ever running a line of its code. An
+                                # empty `match` beside real input stays legal: it says the
+                                # operator filtered everything.
+                                pytest.fail(
+                                    f"{m.name}{at}: assert.data[{index}].input {spec.input} has no "
+                                    f"events, so the operator is never fed and the comparison "
+                                    f"proves nothing. Give it the events the operator should see.")
                         else:
                             # A `source:` case has no input fixture -- the events come from
                             # ticking the reader, not from a file (load_manifest rejects an
@@ -2912,15 +2921,9 @@ class PerfYamlItem(pytest.Item):
 
         self.add_marker(pytest.mark.integration)
         self.add_marker(pytest.mark.perf)
+        # One marker per service, as IntYamlItem does, so `--perf -m sqlserver` selects them.
         for svc in test_manifest.requires:
-            if svc == "postgres":
-                self.add_marker(pytest.mark.postgres)
-            elif svc == "oracle":
-                self.add_marker(pytest.mark.oracle)
-            elif svc == "spanner":
-                self.add_marker(pytest.mark.spanner)
-            elif svc == "gcs":
-                self.add_marker(pytest.mark.gcs)
+            self.add_marker(getattr(pytest.mark, svc))
 
     def repr_failure(self, excinfo):
         return _redacted_failure(self, excinfo)

@@ -21,10 +21,16 @@ def targets(root):
     return [root / parent / name / "expected/rows.csv" for parent, names in COPIES for name in names]
 
 
+def formula():
+    """The source as the docstring states it, generated."""
+    return ("id,msg\n" + "".join(f"{n},row-{n}\n" for n in range(1, 5001))).encode()
+
+
 def check(root):
-    """Return the copies that are missing or differ from the source."""
+    """Return the source if it is not the formula, then the copies that are missing or differ."""
     data = (root / SOURCE).read_bytes()
-    return [t for t in targets(root) if not t.is_file() or t.read_bytes() != data]
+    bad = [] if data == formula() else [root / SOURCE]
+    return bad + [t for t in targets(root) if not t.is_file() or t.read_bytes() != data]
 
 
 def write(root):
@@ -44,7 +50,10 @@ def main(argv):
         return 2
     bad = check(root)
     for t in bad:
-        print(f"differs from {SOURCE}: {t.relative_to(root)}", file=sys.stderr)
+        if t == root / SOURCE:
+            print(f"{SOURCE} is not (n, row-n) for n=1..5000", file=sys.stderr)
+        else:
+            print(f"differs from {SOURCE}: {t.relative_to(root)}", file=sys.stderr)
     return 1 if bad else 0
 
 

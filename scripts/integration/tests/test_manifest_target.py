@@ -3,7 +3,9 @@ assertions (T2a) -- pure parsing tests, no Docker/Striim/pytest-plugin collectio
 """
 from __future__ import annotations
 
+import re
 import warnings
+from pathlib import Path
 
 import pytest
 
@@ -1058,6 +1060,49 @@ assert:
 """)
     with pytest.raises(ManifestError, match="not a metric this writer publishes"):
         load_manifest(path)
+
+
+@pytest.mark.parametrize("name", ["ADAPTER_DETAIL", "LAST_BATCH_INFO", "DATABASE_WRITE_INFO"])
+def test_monitor_takes_the_other_json_metrics_as_subset_mappings(tmp_path, name):
+    """Each is a JSON object the harness models, published beside ADAPTER_BASIC's kind: counts
+    and clocks in one object, so a case names the keys it compares."""
+    path, _ = _write(tmp_path, BASE + f"""
+target:
+  input: input/events.json
+assert:
+  monitor:
+    {name}:
+      Count: 3
+""")
+    assert load_manifest(path).assert_.monitor == {name: {"Count": 3}}
+
+
+def test_monitor_refuses_time_taken_for_merge_as_a_clock(tmp_path):
+    path, _ = _write(tmp_path, BASE + """
+target:
+  input: input/events.json
+assert:
+  monitor:
+    TIME_TAKEN_FOR_MERGE: 0
+""")
+    with pytest.raises(ManifestError, match="is a CLOCK"):
+        load_manifest(path)
+
+
+def test_every_monitor_type_the_harness_models_is_classified_exactly_once():
+    """A Type added to MonitorEvent.java and not to manifest.py is refused as 'not a metric this
+    writer publishes' -- which is what happened to the four this test was written for."""
+    from inttest import manifest as M
+    java = (Path(M.__file__).resolve().parents[1] / "java/src/main/java/com/webaction/runtime/"
+            "monitor/MonitorEvent.java")
+    modelled = re.findall(r'new Type<[^>]*>\("([A-Z_]+)"\)', java.read_text())
+    assert len(modelled) >= 20
+    sets = {"assertable": M._ASSERTABLE_METRICS, "subset": M._SUBSET_METRICS,
+            "shape": M._SHAPE_METRICS, "clock": M._CLOCK_METRICS}
+    for name in modelled:
+        assert [k for k, s in sets.items() if name in s] != [], f"{name} is in no set"
+        assert len([k for k, s in sets.items() if name in s]) == 1, f"{name} is in several sets"
+    assert set().union(*sets.values()) == set(modelled)
 
 
 def test_monitor_needs_a_target_block(tmp_path):
