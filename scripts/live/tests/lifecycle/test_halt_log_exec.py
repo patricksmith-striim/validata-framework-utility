@@ -1,5 +1,6 @@
 """`expect_halt_contains` on a polled halt, through the real plugin: in docker mode a node log that
-could not be read fails the case; only native mode passes with "halt reason not checked".
+could not be read fails the case, even under an xfail; only native mode passes with "halt reason
+not checked".
 
 The `legacy` fixture with `expect_halt` in place of `smoke`, an app that is CRASH once started,
 and the executed-plugin harness, whose node-log marks are empty (no `docker exec` reaches a node).
@@ -42,14 +43,23 @@ def _halt_record(run):
     return halts[0]
 
 
-def test_docker_mode_fails_a_halt_whose_node_log_could_not_be_read(run_case):
-    run = run_case("legacy", edit=_halt_case, prepare=_prepare())
+def _unreadable_failure(run):
     assert run.ret == 1, run.text[-3000:]
     status, _props, xml = run.junit()
     assert status == "failed", xml
-    rec = _halt_record(run)
-    assert rec["status"] == "failed"
-    assert "node log could not be read" in rec["detail"] and "no start mark" in rec["detail"], rec["detail"]
+    assert "node log could not be read" in xml and "no start mark" in xml, xml
+    # raised without a record, so no xfail covering `halt` can absorb it
+    assert [a for a in run.sidecar()["assertions"] if a["type"] == "halt"] == []
+
+
+def test_docker_mode_fails_a_halt_whose_node_log_could_not_be_read(run_case):
+    _unreadable_failure(run_case("legacy", edit=_halt_case, prepare=_prepare()))
+
+
+def test_a_strict_xfail_does_not_absorb_an_unreadable_node_log(run_case):
+    """The default xfail tiers include `halt`; a log that could not be read is not the defect."""
+    edit = lambda y: _halt_case(y) + "xfail: {reason: known defect, strict: true}\n"  # noqa: E731
+    _unreadable_failure(run_case("legacy", edit=edit, prepare=_prepare()))
 
 
 def test_docker_mode_passes_a_halt_whose_reason_is_in_the_log(run_case):

@@ -265,11 +265,19 @@ def _unverifiable(log_tail, mode="docker"):
     with pytest.raises(AssertionFailed) as exc:
         assert_halt(StubClient(status="HALT"), "NS.App", timeout=5, poll=0,
                     contains=("conflict",), mode=mode, log_tail=log_tail)
-    recs = exc.value.records
-    assert len(recs) == 1 and recs[0]["status"] == "failed" and recs[0]["type"] == "halt"
-    assert recs[0]["detail"] == str(exc.value)
-    assert "NOT verified" not in recs[0]["detail"] and "native mode" not in recs[0]["detail"]
-    return recs[0]["detail"]
+    # No record: an xfail covering `halt` must not absorb a log that could not be read.
+    assert exc.value.records == []
+    detail = str(exc.value)
+    assert "NOT verified" not in detail and "native mode" not in detail
+    return detail
+
+
+def test_an_unverifiable_halt_is_not_absorbed_by_an_xfail_on_halt():
+    from livetest.assertions import ExpectedAssertionFailure
+    with pytest.raises(AssertionFailed) as exc:
+        assert_halt(StubClient(status="HALT"), "NS.App", timeout=5, poll=0,
+                    contains=("conflict",), mode="docker", log_tail=lambda: "")
+    assert ExpectedAssertionFailure.if_covered(exc.value, ["halt"]) is exc.value
 
 
 def test_docker_halt_contains_fails_when_the_node_log_cannot_be_read():

@@ -26,7 +26,8 @@ def assert_halt(client, app, timeout: int, poll: float = 2.0,
     # Only "native" has no node log to read: there we PASS but stamp "halt reason not checked
     # (native mode)" into the record detail so the gap is greppable, never silently skipped.
     # In any other mode the log exists, so a tail that raised or came back empty means the
-    # reason was never checked, and that FAILS: a halt for the wrong reason must not pass.
+    # reason was never checked, and that FAILS, with no record: a halt for the wrong reason must
+    # not pass, and an infrastructure failure must not read as the documented defect.
     apps = [app] if isinstance(app, str) else list(app)
     started = time.monotonic()
     deadline = started + timeout
@@ -52,8 +53,11 @@ def assert_halt(client, app, timeout: int, poll: float = 2.0,
                            else "the node log has no text since the case deployed")
                     detail = (f"expect_halt_contains: terminal as expected ({shown}) but {why}, so "
                               f"{list(contains)!r} could not be checked ({mode or 'unknown'} mode)")
-                    raise AssertionFailed(detail, [build_assertion_result(
-                        type="halt", status="failed", spec={}, target=None, db=db, detail=detail)])
+                    # Record-less on purpose, like the status-read error below: a log that could not
+                    # be read is not the halt the manifest documents, and an xfail whose tiers
+                    # include `halt` must not absorb it (ExpectedAssertionFailure.if_covered refuses
+                    # an AssertionFailed with no records).
+                    raise AssertionFailed(detail, [])
                 if not tail.strip():
                     why = (f"node-log tail unavailable ({tail_err})" if tail_err is not None
                            else "no node-log tail on this deployment mode")

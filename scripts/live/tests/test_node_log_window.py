@@ -176,4 +176,4 @@ def test_failed_marks_fail_a_docker_halt_check_end_to_end():
     with pytest.raises(AssertionFailed, match="node log could not be read.*no start mark") as exc:
         assert_halt(Halted(), "NS.App", timeout=1, contains=("ORA-00001",), mode="docker",
                     log_tail=lambda: plugin._halt_log_tail(_Ctx(), marks, run=failing))
-    assert [r["status"] for r in exc.value.records] == ["failed"]
+    assert exc.value.records == []
