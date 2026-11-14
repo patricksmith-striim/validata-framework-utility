@@ -982,6 +982,7 @@ def check_manifests(files: list, tier_of=None) -> list:
         try:
             with warnings.catch_warnings(record=True) as seen:
                 warnings.simplefilter("always", CardinalityWarning)
+                warnings.simplefilter("always", DeprecationWarning)
                 m = load(f)
         except error as e:
             checks.append(_fail(subject, str(e)))
@@ -989,9 +990,12 @@ def check_manifests(files: list, tier_of=None) -> list:
             checks.append(_fail(subject, f"{f}: {type(e).__name__}: {e}"))
         else:
             checks.append(_ok(subject, f"test.yaml loads{how} ({getattr(m, 'name', None) or f.parent.name})"))
-            # A set-only match: loads, but it cannot see a duplicated row (CardinalityWarning).
+            # A set-only match loads, but it cannot see a duplicated row (CardinalityWarning); a
+            # deprecated form loads, and the loader names the file in its warning. Show both here,
+            # where an author looks, before a later release refuses the deprecated form.
             for w in seen:
-                if issubclass(w.category, CardinalityWarning):
+                if issubclass(w.category, CardinalityWarning) or (
+                        issubclass(w.category, DeprecationWarning) and str(w.message).startswith(f"{f}: ")):
                     checks.append(_warn(subject, str(w.message).removeprefix(f"{f}: ")))
     return checks
 

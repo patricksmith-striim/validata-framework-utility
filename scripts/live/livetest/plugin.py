@@ -2267,7 +2267,7 @@ def pytest_collect_file(parent, file_path):
     return LiveYamlFile.from_parent(parent, path=file_path)
 
 def _collection_manifest(path):
-    """Read once for collection; invalid manifests still get their error at run time."""
+    """Read once for collection markers; LiveYamlFile.collect has already loaded the manifest, so an invalid one is a collection error."""
     try:
         raw = yaml.safe_load(path.read_text())
     except (OSError, yaml.YAMLError):
@@ -2284,9 +2284,10 @@ def _declared_services(path, raw=None) -> list:
 
 
 def _declared_depth(path, raw=None):
-    """Missing or invalid depth gets no marker; lint owns validation."""
+    """The declared depth; a missing one is ``regression``, as load_manifest defaults it. An invalid
+    one is refused at collection (LiveYamlFile.collect), never left without a marker."""
     raw = _collection_manifest(path) if raw is None else raw
-    depth = raw.get("depth")
+    depth = raw.get("depth", "regression")
     return depth if isinstance(depth, str) else None
 
 
@@ -2299,6 +2300,13 @@ def _declared_tags(path, raw=None):
 
 class LiveYamlFile(pytest.File):
     def collect(self):
+        # A manifest the loader refuses is a collection error, reported whatever -m selects: before,
+        # a misspelt depth got no depth_* marker, the tier filter deselected the case, and the
+        # loader that would have named the typo never ran.
+        try:
+            load_manifest(self.path)
+        except ManifestError as e:
+            raise self.CollectError(str(e)) from None
         raw = _collection_manifest(self.path)
         yield LiveItem.from_parent(self, name=self.path.parent.name, manifest_path=self.path,
                                    services=_declared_services(self.path, raw),
@@ -4517,6 +4525,10 @@ def _slt_collect_report(config, item, report):
     outcome = getattr(report, "outcome", "passed")
     if when == "call":
         status = {"passed": "passed", "failed": "failed", "skipped": "skipped"}.get(outcome, "error")
+        if hasattr(report, "wasxfail") and outcome in ("passed", "skipped"):
+            # pytest's xfail: an expected failure reports skipped and a non-strict XPASS passed,
+            # each with `wasxfail`. Neither is the plain outcome it borrows.
+            status = "xpassed" if outcome == "passed" else "xfailed"
     elif when == "setup":
         if outcome == "skipped":
             status = "skipped"
@@ -4537,7 +4549,8 @@ def _slt_collect_report(config, item, report):
         "topology": getattr(item, "_slt_topology", "single"),
         "services": list(getattr(item, "_slt_services", [])),
         "duration": max(0.0, float(getattr(report, "duration", 0.0) or 0.0)),
-        "skip_reason": _slt_skip_reason(report) if status == "skipped" else None,
+        "skip_reason": (_slt_skip_reason(report) if status == "skipped"
+                        else str(report.wasxfail) if status == "xfailed" else None),
         "assertions": list(getattr(item, "_slt_records", [])),
     }
     results[item.nodeid] = tr
@@ -4547,6 +4560,24 @@ def _slt_collect_report(config, item, report):
     props = getattr(item, "user_properties", None)
     if path is not None and props is not None and not any(k == "slt_result_json" for k, _ in props):
         props.append(("slt_result_json", str(path)))
+
+
+def _slt_report_xpasses(terminalreporter) -> None:
+    """Name every live case whose xfail did not fail. A non-strict XPASS exits 0, so without this the
+    one sign that a known bug is fixed, or that its assertion stopped checking, is a count."""
+    xpassed = [r for r in (getattr(terminalreporter, "stats", {}) or {}).get("xpassed", [])
+               if getattr(r, "_slt_live", False)]
+    if not xpassed:
+        return
+    terminalreporter.write_sep("=", f"XPASS: {len(xpassed)} live case(s) passed despite xfail")
+    for r in xpassed:
+        terminalreporter.write_line(f"XPASS {r.nodeid}: {getattr(r, 'wasxfail', '') or 'xfail'}")
+    terminalreporter.write_line("The declared failure did not happen: remove the xfail if the bug is fixed, "
+                                "or set xfail.strict: true so an XPASS fails the run.")
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    _slt_report_xpasses(terminalreporter)
 
 
 def _slt_write_sidecar(config):

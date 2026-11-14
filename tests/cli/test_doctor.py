@@ -605,6 +605,17 @@ def test_a_set_only_match_loads_with_a_warning(tmp_path):
     assert "distinct" in checks[1].message and str(d) not in checks[1].message
 
 
+def test_a_deprecated_manifest_loads_with_a_warning(tmp_path):
+    # A bare expect_halt: true loads, deprecated; doctor shows the deprecation beside the ok line.
+    d = tmp_path / "bare"
+    d.mkdir()
+    (d / "test.yaml").write_text("name: b\ntql: app.tql\nexpect_halt: true\n")
+    checks = doctor.check_manifests([d / "test.yaml"])
+    assert [c.status for c in checks] == [doctor.OK_, doctor.WARN], [c.line() for c in checks]
+    assert checks[1].subject == "case bare"
+    assert "expect_halt_contains" in checks[1].message and str(d) not in checks[1].message
+
+
 def test_a_non_finite_stable_seconds_fails_the_case(tmp_path):
     # `.inf` would hold the window open forever and `.nan` would skip it; neither is OK.
     for value in (".inf", ".nan"):

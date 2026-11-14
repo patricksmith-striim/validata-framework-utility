@@ -22,10 +22,11 @@ pytest_plugins = ["pytester"]   # run_case drives a fresh pytest process through
 
 def test_exec_invalid_lifecycle_fails_before_any_fake_provisioning_call(run_case):
     run = run_case("invalid-version")
-    env = _agree(run, "failed")
-    assert "lifecycle: version 2 is not supported" in run.junit()[2]
+    # A manifest the loader refuses is a collection error: named, and nothing provisioned or run.
+    assert run.ret == 2 and "ERROR collecting cases/invalid-version/test.yaml" in run.text, run.text
+    assert "lifecycle: version 2 is not supported" in run.text
     assert not {"resolve_striim", "resolve", "create", "deploy"} & set(run.names())
-    assert env["lifecycle"]["mode"] == "unknown" and env["lifecycle"]["cleanup"]["status"] == "skipped"
+    assert not list((run.root / "live" / "evidence").glob("*/*/evidence.json"))
 
 
 def test_exec_legacy_case_passes_with_qualifies_false(run_case):

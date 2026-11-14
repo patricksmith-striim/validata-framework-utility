@@ -1,9 +1,33 @@
 from __future__ import annotations
+import re
 import time
 
 from livetest.assertions import AssertionFailed
 from livetest.resultschema import build_assertion_result
 from livetest.striim import TERMINAL_STATUSES, StriimTimeout
+
+
+#: Where one server-log record starts: a line that begins with a timestamp. Every line up to the next
+#: such line (a stack trace, a multi-line message) continues the record above it. Text before the
+#: first timestamped line is a record of its own.
+LOG_RECORD_START = re.compile(r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}")
+
+
+def log_records(text: str) -> list[str]:
+    """``text`` split into server-log records, each with its continuation lines (LOG_RECORD_START)."""
+    records, current = [], ""
+    for line in text.splitlines(keepends=True):
+        if LOG_RECORD_START.match(line) and current:
+            records.append(current)
+            current = ""
+        current += line
+    if current:
+        records.append(current)
+    return records
+
+
+def _names(record: str, namespaces) -> bool:
+    return any(re.search(rf"(?<![A-Za-z0-9_]){re.escape(ns)}(?![A-Za-z0-9_])", record) for ns in namespaces)
 
 
 def assert_halt(client, app, timeout: int, poll: float = 2.0,
@@ -28,7 +52,13 @@ def assert_halt(client, app, timeout: int, poll: float = 2.0,
     # In any other mode the log exists, so a tail that raised or came back empty means the
     # reason was never checked, and that FAILS, with no record: a halt for the wrong reason must
     # not pass, and an infrastructure failure must not read as the documented defect.
+    #
+    # The slice is every app node's log since the case deployed, and other apps on the cluster
+    # (sibling cases under SLT_PARALLEL) write to it too. So a substring counts only inside a log
+    # record (LOG_RECORD_START) that names one of this case's namespaces; each substring may come
+    # from a different such record.
     apps = [app] if isinstance(app, str) else list(app)
+    namespaces = sorted({a.split(".", 1)[0] for a in apps})
     started = time.monotonic()
     deadline = started + timeout
     try:
@@ -66,16 +96,22 @@ def assert_halt(client, app, timeout: int, poll: float = 2.0,
                               f"{list(contains)!r} was NOT verified")
                     return [build_assertion_result(type="halt", status="passed", spec={},
                                                    target=None, db=db, detail=detail)]
-                missing = [s for s in contains if s not in tail]
+                own = "".join(r for r in log_records(tail) if _names(r, namespaces))
+                missing = [s for s in contains if s not in own]
                 if missing:
+                    elsewhere = [s for s in missing if s in tail]
                     detail = (f"expect_halt_contains: terminal as expected ({shown}) but the "
                               f"node log tail is missing {missing!r} (required, all of: "
                               f"{list(contains)!r})")
+                    if elsewhere:
+                        detail += (f"; {elsewhere!r} appear only in log records that do not name "
+                                   f"{', '.join(namespaces)} (another app's output)")
                     raise AssertionFailed(detail, [build_assertion_result(
                         type="halt", status="failed", spec={}, target=None, db=db, detail=detail)])
-                verified = [s for s in contains if s in tail]
+                verified = [s for s in contains if s in own]
                 detail = (f"terminal as expected: {shown}; expect_halt_contains verified: "
-                          f"found {list(verified)!r} (all {len(contains)} required)")
+                          f"found {list(verified)!r} (all {len(contains)} required) in log "
+                          f"records naming {', '.join(namespaces)}")
                 return [build_assertion_result(type="halt", status="passed", spec={},
                                                target=None, db=db, detail=detail)]
             if time.monotonic() >= deadline:

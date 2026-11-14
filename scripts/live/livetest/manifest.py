@@ -1374,6 +1374,11 @@ def load_manifest(path: Path) -> TestManifest:
         raise ManifestError(
             f"{path}: 'expect_halt_contains' requires 'expect_halt: true' -- it is only "
             f"checked on the halt path, so without it the key would be a silent no-op")
+    if expect_halt and not expect_halt_contains:
+        _deprecated(path, "'expect_halt: true' without 'expect_halt_contains' accepts any terminal "
+                          "status for any reason, a startup failure included; set "
+                          "expect_halt_contains to the halt reason. This becomes an error in a "
+                          "later release.")
 
     recover = _normalize_recover(raw.get("recover"), path)
     # `when: post_recover` seeds run after the (last) recover: restore reaches RUNNING, before
