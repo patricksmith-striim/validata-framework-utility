@@ -227,6 +227,17 @@ class ManifestError(Exception):
     pass
 
 
+def _timeout(raw: dict, path) -> int:
+    """`timeout` is ``int()`` of the value, as documented in TEST-YAML.md: a fraction keeps its whole
+    seconds and the range is not checked. A value ``int()`` cannot read, such as the duration string
+    `90s` other keys take, is a ManifestError naming the file rather than a bare ValueError."""
+    value = raw.get("timeout", 120)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        raise ManifestError(f"{path}: 'timeout' must be a number of seconds, got {value!r}") from None
+
+
 def _diff_poll(raw: dict, path) -> float:
     """§85.3. Validate `diff_poll` loudly rather than letting a bad value reach time.sleep().
 
@@ -1852,7 +1863,7 @@ def load_manifest(path: Path) -> TestManifest:
         bigtable_setup=bigtable_setup,
         action_specs=action_specs,
         assert_=dict(raw.get("assert", {})),
-        timeout=int(raw.get("timeout", 120)),
+        timeout=_timeout(raw, path),
         fixture_timeout=_fixture_timeout(raw, path),
         diff_poll=_diff_poll(raw, path),
         tags=list(tags),

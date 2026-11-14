@@ -13,8 +13,8 @@ other user out. ``ensure_dir`` widens the framework's own entries that the calli
 process; what another user owns is theirs to widen, and a dir nobody lets us write to fails with the
 fixes named.
 
-An explicit ``SLT_LOCK_DIR`` is a dir of the user's own (README, "When a run cannot start"): it is
-never widened, and its files follow the umask.
+An explicit ``SLT_LOCK_DIR`` is a dir of the user's own (docs/RUN-YOUR-FIRST-TEST.md, "If it did not
+work"): it is never widened, and its files follow the umask.
 """
 import os
 import pwd
@@ -87,7 +87,7 @@ def ensure_dir(d) -> Path:
             f"the shared lock dir {d} belongs to {who} (mode {stat.S_IMODE(st.st_mode):o}) and you cannot "
             f"write to it; an older striim-test made it. Any run of this version as {who} widens it, or "
             f"{who} can run `chmod 1777 {d}`. Or use a dir of your own: export SLT_LOCK_DIR=$HOME/.slt-locks "
-            f"(README, \"When a run cannot start\")")
+            f"(docs/RUN-YOUR-FIRST-TEST.md, \"If it did not work\")")
     return d
 
 

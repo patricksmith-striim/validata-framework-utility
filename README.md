@@ -22,7 +22,7 @@ dot, so `ls` hides it; `ls -a` shows it.
 ```
 git clone https://github.com/striim/striim-testing-framework-utility.git striim-testing-framework-utility
 cd striim-testing-framework-utility
-python3 -m venv .venv && .venv/bin/pip install -e .
+python3 -m venv .venv && .venv/bin/pip install -e .     # python3 must be 3.12 or later
 . .venv/bin/activate
 cp .env.example .env
 ```
@@ -122,6 +122,8 @@ also covers running against your own Striim server.
 - `scripts/integration`: the integration test engine (`inttest`).
 - `tools/python/striim_api.py`: the Striim REST client both engines use.
 - `docs/`: these docs.
+- `examples/`: a worked example of a consumer repo (Acme Retail).
+- `skills/`: the TQL authoring skill, for AI coding assistants that load skills.
 
 The optional Teradata driver is Teradata's own, under Teradata's licence: see
 [docs/SERVICES.md](docs/SERVICES.md), "Teradata". The drivers that Docker mode downloads are

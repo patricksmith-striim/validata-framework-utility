@@ -492,7 +492,7 @@ def check_installers(env: dict) -> list:
         if not sp._in_checkout():
             return [_fail("installers", f"{sp.DEPS_MANIFEST_ENV} is unset, and an installed "
                                         f"framework builds Striim only from a manifest; see "
-                                        f"the README's Docker mode")]
+                                        f"docs/RUN-YOUR-FIRST-TEST.md, \"3b. Docker mode\"")]
         return [_ok("installers", f"{sp.DEPS_MANIFEST_ENV} unset; the first build downloads "
                                   f"about 6.3 GB of Striim packages and drivers")]
     try:
@@ -838,7 +838,7 @@ def check_lock_dir(env: dict) -> list:
     target = d if d.exists() else next((p for p in d.parents if p.exists()), d)
     if not os.access(target, os.W_OK | os.X_OK):
         return [_fail("lock dir", f"{target} is not writable by this user; export "
-                                  f"SLT_LOCK_DIR=$HOME/.slt-locks (README, \"When a run cannot start\")")]
+                                  f"SLT_LOCK_DIR=$HOME/.slt-locks (docs/RUN-YOUR-FIRST-TEST.md, \"If it did not work\")")]
     return [_ok("lock dir", f"{d} is writable")]
 
 

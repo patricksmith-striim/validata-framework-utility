@@ -43,6 +43,7 @@ git init
 | File | What it is |
 |---|---|
 | `framework.pin` | the framework version |
+| `AGENTS.md` | instructions for AI coding assistants working in your repo |
 | `scripts/sync-framework.py` | the sync script; standard library only |
 | `gold-targets.yaml` | your project manifest: `suites.live: tests/live` |
 | `.env.example` | your settings; the sync script copies it to `.env` when there is none |
@@ -64,7 +65,9 @@ v0.1.0
 - Never a branch name: a branch moves, so two machines could run different code under the same pin.
   The script refuses one.
 
-The template ships pinned to the version it came from.
+The template ships pinned to the framework's latest release tag, the `version` in the framework's
+`pyproject.toml`. A clone of the default branch can be ahead of that release; to run exactly the
+code you cloned, pin its full commit instead.
 
 ## 3. Set up the framework
 
@@ -118,6 +121,7 @@ Exit 4 is a git or network failure, 5 a failed install. Options:
 
 | Option | Does |
 |---|---|
+| `--pin FILE` | read the pin from this file instead of the repo's `framework.pin` |
 | `--home DIR` (or `FRAMEWORK_CHECKOUT`) | put the checkout somewhere else |
 | `--remote URL` (or `FRAMEWORK_REMOTE`) | clone from another URL, such as a mirror |
 | `--check` | change nothing; exit 0 only when the checkout is at the pin, detached, with no local changes |
@@ -248,8 +252,10 @@ python3 scripts/sync-framework.py
 
 ## Several checkouts or people on one machine
 
-Settings come from three layers, highest first: your shell, your repo's `.env`, then a machine-wide
-file, `${XDG_CONFIG_HOME:-$HOME/.config}/striim-test/machine.env` (or the path in `SLT_MACHINE_ENV`).
+Settings come from four layers, highest first: your shell, your repo's `.env`, the framework clone's
+`.env`, then a machine-wide file, `${XDG_CONFIG_HOME:-$HOME/.config}/striim-test/machine.env` (or the
+path in `SLT_MACHINE_ENV`). A value left in the framework clone's `.env` reaches your runs unless your
+repo's `.env` or your shell sets it.
 The machine file uses the same `KEY=VALUE` format. Put shared things there, and protect it with
 `chmod 600`:
 

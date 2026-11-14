@@ -30,7 +30,7 @@ A test is a folder containing a `test.yaml` (this schema) plus whatever it refer
 | `op` | mapping \| list | no | none | build + upload OpenProcessor jar(s), registered via `LOAD OPEN PROCESSOR` — single mapping or a list, see below |
 | `udf` | mapping \| list | no | none | build + upload UDF jar(s), registered via a global `LOAD` (`client.load_jar`) — single mapping or a list, see below |
 | `server_files` | list | no | `[]` | place test-dir files onto the Striim server before deploy or after RUNNING, or upload and register a prebuilt jar (`load:`, from the test dir or outside it) — see below |
-| `timeout` | int | no | `120` | seconds an `assert:` tier polls before failing |
+| `timeout` | number | no | `120` | seconds an `assert:` tier polls before failing. A bare number of seconds, not a duration string: `90s` is refused. The loader keeps the whole seconds (`2.9` is `2`) and does not check the range |
 | `fixture_timeout` | number | no | unset | Opt-in Postgres fixture statement deadline in seconds, independent of assertion `timeout`; positive finite value up to `2147483.647`, applies to DDL/slot setup and seed SQL including action seeds. Overrides `SLT_PG_FIXTURE_TIMEOUT`; if both are unset, server statement/lock policy is retained. An enabled budget also sets the lock deadline to min(15 seconds, half the statement budget). Concurrent action DML retains its previous unbounded behavior. |
 | `tags` | list[string] | no | `[]` | free-form labels (e.g. `[op, oracle, p1]`). `striim-test run` does not select by tag. In a direct pytest run of the engine, `-k p1` uses case-insensitive substring matching against paths, tags and markers, while `-m tag_p1` selects the exact tag marker (case is preserved). Markers are registered automatically as `tag_<name>`, replacing each character outside ASCII letters, digits and `_` with `_` (e.g. `slow-path` becomes `tag_slow_path`); tags that sanitise to the same name share a marker |
 | `disabled` | string \| bool | no | — | truthy => the test **skips** before any provisioning (collected + reported as skipped, never run). Use a non-empty string as the reason (e.g. `disabled: "top-level JSON_ARRAY writes {}; issue 123"`). For known-bug / quarantine repros that shouldn't fail CI. Force-run a disabled test with env `SLT_RUN_DISABLED=1` (e.g. to check whether the underlying bug is fixed). |
@@ -46,7 +46,7 @@ A test is a folder containing a `test.yaml` (this schema) plus whatever it refer
 | `lifecycle` | mapping | no | none | how the framework knows the app is ready and has finished, before any assertion runs, and that the run cleans up only what it created. See **`lifecycle:`** below |
 | `depth` | string | no | `regression` | one of `smoke`, `gate`, `regression`, `fault`, `customer`, `measure`, `canary`; becomes the pytest marker `depth_<value>`, for selecting with `-m` |
 | `diff_poll` | number | no | `2` | seconds between the reads of an `assert.diff` poll; must be greater than 0 |
-| `generate` | list | no | `[]` | run a data generator and place its output on the Striim server: entries `{kind, workload, dest, when}`. `kind` is `ggtrail` (GoldenGate trail files from a `workload.yaml`); `workload` is relative to the test dir; `dest` is a server directory; `when` defaults to `post_start` |
+| `generate` | list | no | `[]` | run a data generator and place its output on the Striim server: entries `{kind, workload, dest, when}`. `kind` is `ggtrail` (GoldenGate trail files from a `workload.yaml`); `workload` is relative to `source_dir` (the test dir, or `example:`'s dir if set); `dest` is a server directory; `when` defaults to `post_start` |
 
 `placement` is also a valid `xfail.tiers` entry. It is excluded from the default
 tiers and must be explicitly opted into: a failure to prove placement must not be
@@ -511,8 +511,9 @@ seed:
   for data that must arrive after the restart, for example a parent whose child was held
   across the interruption.
 - **`after`** — optional delay before this file runs, as `30s`, `500ms`, `2m`, or a bare number
-  (seconds). Measured **from the moment the app reached RUNNING**, not from the previous seed
-  file, so entries at `10s` and `30s` fire 10s and 30s in, not 10s and 40s. The runner prints a
+  (seconds). Measured **from the moment the app reached RUNNING**, or, when the source's reader
+  reports that it is reading, from that later moment; not from the previous seed file, so entries
+  at `10s` and `30s` fire 10s and 30s in, not 10s and 40s. The runner prints a
   heartbeat while waiting so a long delay does not read as a hung test.
 - **`after` with `when: pre_deploy` is an error**, not a silent no-op. Pre-deploy seeding runs
   before the app exists, so there is nothing to wait for and an author writing it meant
@@ -617,7 +618,7 @@ in flight at the interruption are never replayed. `recover:` is how a test asks 
 |---|---|
 | `mode` | Required: `stop`, `quiesce`, `kill`, or `restart` (the last requires `node`) |
 | `after`, `every` | Timed delays; both refused with `trigger`; `every` needs `times > 1` |
-| `times` | 1; repeated cycles require `expect_running: true` and a repeatable trigger |
+| `times` | 1; repeated cycles require `expect_running: true`. With a `trigger`, `times > 1` needs a `checkpoint` trigger without `above` (one that advances each cycle) |
 | `settle` | 20s after the last restore |
 | `expect_running` | `true`; a recovery marker requires it |
 | `trigger` | Optional bounded progress reader, defined below |
@@ -1117,7 +1118,7 @@ The documented in-place upgrade. The application is not dropped, so its checkpoi
 re-created components resume from it. The fragment can re-create a source on another adapter (an
 older or newer OP version, both loaded with `server_files` `load:`).
 
-<!-- snippet: shape a whole alter_recompile action; `file` names a TQL fragment in the test dir -->
+<!-- snippet: shape a whole alter_recompile action; `file` names a TQL fragment in `source_dir` -->
 ```yaml
 action:
   - type: alter_recompile
@@ -1150,10 +1151,10 @@ CREATE OR REPLACE SOURCE ChangeSource USING Global.MyCdcReaderV2 (
   `USE ${NS}; UNDEPLOY APPLICATION <app>; ALTER APPLICATION <app>;` the rendered fragment,
   `ALTER APPLICATION <app> RECOMPILE;`, the TQL's own `DEPLOY APPLICATION <app> …;` (so deployment
   groups carry over; plain `DEPLOY` when the TQL has none) and `START APPLICATION <app>;`. Then wait
-  for RUNNING, place `server_files` (test-dir files; `{file, dest}` only), and run `seed`. A
+  for RUNNING, place `server_files` (files in `source_dir`; `{file, dest}` only), and run `seed`. A
   tailing reader (a GoldenGate trail, a FileReader) gets the rest of its input only after the
   swap: a transaction split across two trail files is still open when the app stops.
-- **Refused at load:** a missing or empty `file`, one outside the test dir, one containing a
+- **Refused at load:** a missing or empty `file`, one outside `source_dir` (the test dir, or `example:`'s dir if set), one containing a
   statement the action writes itself (`USE`, `ALTER APPLICATION`, `RECOMPILE`, `DEPLOY`/`UNDEPLOY`/
   `START`/`STOP`/`END APPLICATION`, `CREATE APPLICATION`; `--` comments are ignored), and unknown
   keys.

@@ -81,7 +81,8 @@ SECTIONS = (
         ("SLT_LIVE_CASES", "`scripts/live/regression`",
          "The live case root, or several separated by `:` (`;` on Windows). `striim-test run PATH` "
          "runs only cases under it."),
-        ("SLT_INT_CASES", "the clone's integration cases", "The integration case root."),
+        ("SLT_INT_CASES", "`scripts/integration/regression`, which the framework does not ship",
+         "The integration case root. The framework ships no integration cases, so set it to yours."),
         ("SLT_SERVICES_DIR", "`scripts/live/services`", "Live service definitions."),
         ("SLT_INT_SERVICES_DIR", "`scripts/integration/services`", "Integration service definitions."),
         ("SLT_STATE_DIR", "`scripts/live`", "Run directories and coordination files."),
@@ -91,7 +92,8 @@ SECTIONS = (
         ("SLT_MACHINE_ENV", "`${XDG_CONFIG_HOME:-$HOME/.config}/striim-test/machine.env`",
          "The machine-wide settings file."),
         ("SLT_FRAMEWORK_DOTENV", "the clone's `.env`",
-         "A file to read as the framework clone's `.env`, when `SLT_PROJECT_ROOT` is not set."),
+         "A file to read in place of the framework clone's `.env`. That layer is read whether or not "
+         "`SLT_PROJECT_ROOT` is set, below the project's `.env`; a file that does not exist reads as empty."),
         ("SLT_LOCK_DIR", "`/tmp/slt-locks`",
          "The coordination directory every run on the machine shares (mode 1777)."),
     )),
@@ -326,6 +328,7 @@ def service_settings(services: Path) -> list:
         compose = file.parent / raw["compose"] if raw.get("compose") else None
         text = compose.read_text() if compose and compose.is_file() else ""
         defaults, compose_vals = raw.get("docker_defaults") or {}, compose_defaults(text)
+        required = set(raw.get("required_env") or ())
         rows, seen = [], set()
 
         def add(name, default, what):
@@ -338,8 +341,13 @@ def service_settings(services: Path) -> list:
                 what = "the optional observer admin account, owning database logon triggers in the data PDB"
             if name == "SLT_MYSQL_ADMIN_USER":
                 what = "the admin account, which makes missing schemas and cleans up; it never creates or changes an account"
-            add(name, code(defaults.get(field)), "Your own instance: " + what + "." if field != "host"
-                else what[0].upper() + what[1:] + ".")
+            if file.parent.name == "teradata" and field in ("user", "password"):
+                what = FIELDS["admin_" + field]
+            if field == "host" and compose is None:
+                what = ("your own instance's host. The framework ships no container for this service: with "
+                        "this unset, its tests skip")
+            add(name, code(defaults.get(field)), ("**Required.** " if name in required else "")
+                + ("Your own instance: " + what + "." if field != "host" else what[0].upper() + what[1:] + "."))
         for field, name in (raw.get("docker_env") or {}).items():
             add(name, code(compose_vals.get(name, defaults.get(field))),
                 "Host port the container publishes" + ("" if field == "port" else " for "
@@ -348,7 +356,8 @@ def service_settings(services: Path) -> list:
             if (name and name not in seen and name not in CORE and name not in NOT_SETTINGS
                     and file.parent.name != "striim"):
                 add(name, code(compose_vals.get(name)), describe(name)[1])
-        out.append((file.parent.name, rows))
+        rows.sort(key=lambda row: row[0] != raw.get("live_env", {}).get("host"))   # the host row first
+        out.append((file.parent.name, rows, compose is None))
     return out
 
 
@@ -394,7 +403,7 @@ def build() -> str:
     live = [s for s in service_settings(ROOT / "scripts/live/services") if s[0] != "striim"]
     integration = service_settings(ROOT / "scripts/integration/services")
     listed = {n for _, rows in SECTIONS for n, _, _ in rows}
-    listed |= {n for _, rows in live + integration for n, _, _ in rows}
+    listed |= {n for _, rows, _ in live + integration for n, _, _ in rows}
     # Service settings no service file names (view hosts, extras): file them under their service.
     prefixes = {"PG": "postgres", "POSTGRES": "postgres", "ORA": "oracle", "ORACLE": "oracle",
                 "MSSQL": "mssql", "MYSQL": "mysql", "MARIADB": "mariadb", "VERTICA": "vertica", "KAFKA": "kafka",
@@ -404,7 +413,7 @@ def build() -> str:
         tier, _, rest = name.partition("_")
         service = prefixes.get(rest.split("_")[0])
         group = live if tier == "SLT" else integration
-        match = [rows for svc, rows in group if svc == service or (svc, service) == ("sqlserver", "mssql")]
+        match = [rows for svc, rows, _ in group if svc == service or (svc, service) == ("sqlserver", "mssql")]
         if not service or not match:
             raise SystemExit(f"settings_reference: {name} belongs to no section; describe it in "
                              "tools/settings_reference.py")
@@ -416,11 +425,15 @@ def build() -> str:
         "Every setting the framework reads: where you can set it, its default, and what it does.",
         "`tests/test_settings_reference.py` fails when the code reads a setting this page does not list.", "",
         "## Where settings come from", "",
-        "Highest first: your shell's environment, then `.env` in your project root (in a framework "
-        "clone, its root), then the machine file `${XDG_CONFIG_HOME:-$HOME/.config}/striim-test/machine.env` "
-        "(or the file `SLT_MACHINE_ENV` names). The **Where** column says which of them a setting is read from:", "",
+        "Highest first: your shell's environment, then `.env` in your project root (`SLT_PROJECT_ROOT`), "
+        "then the framework clone's own `.env` (or the file `SLT_FRAMEWORK_DOTENV` names), then the machine "
+        "file `${XDG_CONFIG_HOME:-$HOME/.config}/striim-test/machine.env` (or the file `SLT_MACHINE_ENV` "
+        "names). Without `SLT_PROJECT_ROOT` the project is the clone, and its `.env` is read once. The clone's "
+        "`.env` is read under a project root too, so a value left in it, such as `SLT_PG_HOST`, reaches your "
+        "project's runs unless your project's `.env` or your shell sets it. "
+        "The **Where** column says which of them a setting is read from:", "",
         "- **shell**: only from the environment. In `.env` it is not read.",
-        "- **`.env`**: from the environment or `.env`.",
+        "- **`.env`**: from the environment, the project's `.env` or the clone's `.env`.",
         "- **machine**: from the machine file too. " + LANES + " are never read from it, so two "
         "checkouts on one machine stay apart; license keys are read from the shell or the machine file "
         "only, never `.env`.",
@@ -438,17 +451,20 @@ def build() -> str:
         out.append("")
     out += ["## Services", "",
             "To use your own database instead of the container the framework starts, set its host (the "
-            "first row); the other settings default to the container's values, shown here. "
+            "first row); the other settings default to the container's values, shown here. Teradata and "
+            "ServiceNow have no container: their tests run only against your own instance, and skip while "
+            "its host is unset. A setting marked **Required** must be set before such a test can connect. "
             "[SERVICES.md](SERVICES.md) has each service's accounts, tokens and routes.", ""]
-    for svc, rows in live:
-        out += [f"### {NAMES.get(svc, svc)} (`{svc}`)", ""] + table(rows, allowed, "Docker default") + [""]
+    for svc, rows, external in live:
+        out += [f"### {NAMES.get(svc, svc)} (`{svc}`)", ""]
+        out += table(rows, allowed, "Default" if external else "Docker default") + [""]
     title, rows = next(s for s in SECTIONS if s[0] == "Integration tier")
     out += [f"## {title}", "", "The integration engine's own settings "
             "([INTEGRATION-TESTS.md](INTEGRATION-TESTS.md)), then its services'.", ""]
     out += table(rows, allowed) + [""]
-    for svc, rows in integration:
+    for svc, rows, external in integration:
         out += [f"### {NAMES.get(svc, svc)}, integration (`{svc}`)", ""]
-        out += table(rows, allowed, "Docker default") + [""]
+        out += table(rows, allowed, "Default" if external else "Docker default") + [""]
     out += ["## Set by the framework", "",
             "The framework sets these for its own processes. Do not set them.", "",
             "| Names | What they carry |", "|---|---|"]

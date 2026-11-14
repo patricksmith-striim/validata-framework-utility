@@ -36,9 +36,11 @@ and misses a test that reaches Spanner from a folder not named after it.
 
 ## A skipped run
 
-Every live case skips when the cluster is not fully formed, and pytest reports that as `N skipped`
-with exit status 0. `striim-test run` treats a selection where nothing executed as a failure (exit
-3), and so does the live tier unless `SLT_ALLOW_NO_CLUSTER=1` is set. With direct pytest, read the
+Every live case skips when the cluster is not fully formed. Plain pytest would report that as
+`N skipped` with exit status 0; the live tier instead exits 1 when every live case skipped for
+missing infrastructure and none executed, unless `SLT_ALLOW_NO_CLUSTER=1` is set (which never
+excuses a build failure). `striim-test run` reports a selection where nothing executed as exit 3.
+A run where some cases executed keeps pytest's exit status, so with direct pytest read the
 executed count from the JUnit XML, not the exit code.
 
 The live tier also fails a run in which any case skipped because a module it loads could not be
@@ -130,13 +132,17 @@ let a test repo drive the engine.
 | `SLT_STATE_DIR` | `scripts/live` | run directories and coordination files |
 | `SLT_INT_CASES`, `SLT_INT_SERVICES_DIR` | `scripts/integration/...` | the integration tier's ([INTEGRATION-ENGINE.md](INTEGRATION-ENGINE.md)) |
 
-**Precedence, per key:** the process environment, then `<project root>/.env`, then the default.
-Settings shared by several checkouts can also come from a machine file
-(`${XDG_CONFIG_HOME:-$HOME/.config}/striim-test/machine.env`, or `SLT_MACHINE_ENV`), below `.env`.
+**Precedence, per key:** the process environment, then `<project root>/.env`, then the clone's
+`.env`, then the machine file (`${XDG_CONFIG_HOME:-$HOME/.config}/striim-test/machine.env`, or
+`SLT_MACHINE_ENV`), then the default (`livetest/service_env.py`, `values`). Without
+`SLT_PROJECT_ROOT` the project root is the clone, so the two `.env` layers are one file.
 
 **`.env` rules:**
-- It is read from `SLT_PROJECT_ROOT` as set in the environment, else from the clone. An
-  `SLT_PROJECT_ROOT` line inside `.env` moves modules but not the `.env` itself.
+- The project's `.env` is read from `SLT_PROJECT_ROOT` as set in the environment, else from the
+  clone. An `SLT_PROJECT_ROOT` line inside `.env` moves modules but not the `.env` itself.
+- The clone's `.env` is read under a project root too, below the project's: a value left in the
+  framework checkout's `.env`, such as `SLT_PG_HOST`, reaches a consumer's run unless the project's
+  `.env` or the environment sets it.
 - The clone's `.env` is the file `SLT_FRAMEWORK_DOTENV` names, when that is set in the
   environment (never from a `.env` or the machine file); otherwise the framework checkout's own.
   A file that does not exist reads as empty, as for `SLT_MACHINE_ENV`, so a mistyped path
@@ -158,7 +164,7 @@ exactly as before.
 - The first root is the primary root: the default collection path, and what a single-root caller sees.
 - A run that collects the whole primary root (pytest's `regression`, `striim-test run` or `list` with
   no path, `-k <name>`) collects every root. A run naming a case or folder collects only that.
-- Depth and service markers, `--depth`/`-m` filtering, pre-flight's service and OP/UDF unions and
+- Depth and service markers, `-m` filtering, pre-flight's service and OP/UDF unions and
   `known_test_ids` cover every root.
 - Ids stay unambiguous: a manifest `name:` must be unique across all roots (collection refuses a
   duplicate, as within one root). A case under the project root keeps its project-relative

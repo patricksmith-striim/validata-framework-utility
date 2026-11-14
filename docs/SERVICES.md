@@ -38,7 +38,7 @@ the setting when the port is busy.
 | Service (`requires:`) | Runs as | CDC | Host port | Routes | Use your own: set |
 |---|---|---|---|---|---|
 | `postgres` | `postgres:16` + `wal2json` | yes | 5432 | `postgres-source`, `postgres-target` | `SLT_PG_HOST` |
-| `oracle` | Oracle Free 23ai, ARCHIVELOG + LogMiner user | yes | 1521 | `oracle-source`, `oracle-target`, `oracle-admin` | `SLT_ORA_HOST` |
+| `oracle` | Oracle AI Database 26ai Free (23.26.2), ARCHIVELOG + LogMiner user | yes | 1521 | `oracle-source`, `oracle-target`, `oracle-admin` | `SLT_ORA_HOST` |
 | `mssql` | SQL Server 2022 Developer, CDC + Agent | yes | 1433 | `mssql-source`, `mssql-target`, `mssql-admin` | `SLT_MSSQL_HOST` |
 | `mysql` | `mysql:8.0`, binlog `ROW` | yes | 3306 | `mysql-source`, `mysql-target` | `SLT_MYSQL_HOST` |
 | `vertica` | Vertica 25.3 Community Edition, one node | no | 5433 | `vertica-source`, `vertica-target`, `vertica-admin` | `SLT_VERTICA_HOST` |
@@ -89,8 +89,10 @@ SLT_PG_ADMIN_PASSWORD=...
   workers about 10 seconds before it kills them. If striim-test is killed with SIGKILL, Linux sends
   the tier's pytest process SIGTERM (with `--parallel` its workers are cut short); macOS has no
   equivalent and the tier runs on unsupervised. Anything that stops
-  the run before its cleanup ends leaves objects behind: `python -m livetest.ownership replay`
-  reclaims them.
+  the run before its cleanup ends leaves objects behind: `python -m livetest.ownership replay <ledger>`
+  reclaims them. Ledgers are JSON files, one per test, in `lifecycle/ledgers/` under the state directory (`SLT_STATE_DIR`); the run prints
+  a leftover ledger's path (`[slt] leftover ownership ledger:`), and `striim-test doctor` names the
+  full command for each one it finds.
 
 ## Striim peer API for node faults
 
@@ -147,7 +149,7 @@ The default service; the samples use it. `postgres:16` with the `wal2json` plugi
 
 ## Oracle (`oracle`)
 
-Oracle Free 23ai, built from `gvenzl/oracle-free` with ARCHIVELOG, supplemental logging and a
+Oracle AI Database 26ai Free (23.26.2), built from `gvenzl/oracle-free` with ARCHIVELOG, supplemental logging and a
 LogMiner user baked in. It runs natively on Linux x86-64 and Apple Silicon.
 
 | | |
@@ -540,7 +542,7 @@ other ports, so both tiers can run at once. Same accounts and passwords.
 | `postgres` (`postgres:16`) | 15432 | `INT_PG_HOST` and `INT_PG_*` |
 | `mysql` (`mysql:8.0`) | 13306 | `INT_MYSQL_HOST` and `INT_MYSQL_*` |
 | `mariadb` (`mariadb:10.11`, routes `mariadb-source`/`mariadb-target`) | 13307 | `INT_MARIADB_HOST` and `INT_MARIADB_*` |
-| `oracle` (Oracle Free 23ai, amd64) | 11521 | `INT_ORA_HOST` and `INT_ORA_*` |
+| `oracle` (Oracle AI Database 26ai Free 23.26.2, amd64) | 11521 | `INT_ORA_HOST` and `INT_ORA_*` |
 | `sqlserver` (SQL Server 2022) | 11433 | `INT_MSSQL_HOST` and `INT_MSSQL_*` |
 | `spanner` (emulator 1.5.55) | 19010, 19020 | `INT_SPANNER_HOST` and `INT_SPANNER_*` |
 | `bigtable` (Bigtable emulator) | 19470 | `INT_BIGTABLE_HOST` and `INT_BIGTABLE_*` |
@@ -643,8 +645,8 @@ IPv4 HTTP endpoint, so no machine DNS or trust changes are needed.
 
 Bounded scalar assertions and actual Striim 5.4.2 legacy streaming / CSV batch fixtures
 are qualified on Linux amd64. The installed Java client exact-chunk-boundary case
-is explicitly excluded; a client regression with a one-row oracle must pass before
-this exclusion is lifted.
+is explicitly excluded. The framework no longer carries a client regression for it; one
+with a one-row oracle must be re-added and pass before this exclusion is lifted.
 Non-ASCII batch text requires the documented per-stack UTF-8 JVM setting in the
 service README. Storage Write, recovery, IAM, billing and cloud equivalence remain
 unqualified. BigQueryWriter batch uploads are direct

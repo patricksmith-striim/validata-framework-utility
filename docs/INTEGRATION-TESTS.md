@@ -133,7 +133,7 @@ assert:                                     # required
 ```
 
 Remaining optional keys: `password_properties:` (names `properties:` keys to wrap in `Password`),
-`requires:` (services: `postgres`, `mysql`, `mariadb`, `oracle`, `sqlserver`, `spanner`, `gcs`, `vertica`, or a
+`requires:` (services: `postgres`, `mysql`, `mariadb`, `oracle`, `sqlserver`, `spanner`, `gcs`, `bigtable`, `vertica`, or a
 connection-only `teradata`/`servicenow`; see [SERVICES.md](SERVICES.md); a name no services root
 defines is refused at load), `ddl:`/`seed:`
 (a filename, or a `{file, db}` list — `db` defaults to `postgres-source`; other routes are
@@ -453,8 +453,8 @@ seed SQL and writes `seed.go`.
   from the case's own `timeout:` so the Java side always gives up first and reports the handshake
   rather than letting a generic "timed out" blame the operator. It bounds a *handshake*, never an
   assertion — the tick budget is still the only thing that decides a case's outcome.
-- The **live** tier has a similarly-named `seed_when`, reworked into a per-file `when:` with an
-  `after:` delay. The two tiers are not the same feature: this one is a case-level flag with a
+- The **live** tier had a similarly-named `seed_when`; it was reworked into a per-file `when:` with an
+  `after:` delay, and the live loader now refuses `seed_when`. The two tiers are not the same feature: this one is a case-level flag with a
   blocking handshake, because a subprocess driver has no "app is RUNNING" moment to hang a delay on.
 
 ### `sort_by:` — comparing output that is a SET, not a sequence
@@ -831,7 +831,7 @@ assert:
   `fan[pg+pg2]` when variants share a service; a `-` in a variant name is written `~2d`). An item carries only its group's service markers and starts only those
   services, so `-m sqlserver` runs a case's SQL Server variants alone, and under xdist each group
   takes its own worker. A case without variants keeps its plain id. A Spanner group item is marked `spanner`, so a runner keeps Spanner serial with
-  `-m "not spanner" -n N`, then `-m spanner` (gold-cli does); a bare `-n N` runs it beside the others. `INT_VARIANT_ITEMS=0` makes the
+  `-m "not spanner" -n N`, then `-m spanner`; a bare `-n N` runs it beside the others. `INT_VARIANT_ITEMS=0` makes the
   whole case one item again.
 - **Inside one item, runs are serial by default.** With `INT_VARIANT_ITEMS=0`,
   `INT_VARIANT_WORKERS=N` drives up to N variants at once, each in its own worker. Variants that

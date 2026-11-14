@@ -139,6 +139,8 @@ It must name all nine files: `striim-dbms-5.4.2-Linux.deb`, `striim-node-5.4.2-L
 run checks every digest before it builds, and stops at the first file that is missing or does not
 match, naming it. With `SLT_TERADATA_JDBC=1` it must also name `terajdbc-20.00.00.46.jar`. It
 copies the files into the clone (about 5.2 GB) and never changes the originals.
+These are the names for the default release, 5.4.2. With `STRIIM_HOME` set, Docker mode builds
+that install's release, and the four `striim-*` packages carry its version in place of `5.4.2`.
 
 **Apple Silicon.** The Striim image is amd64 and runs under emulation: sample 01 takes about six
 minutes there, against about a minute and a half on a Linux x86-64 host.
@@ -237,6 +239,25 @@ case skips (exit 3). Coordinate other stack users first; `disabled_parallel` exc
 case but provides no lock.
 Spanner and file samples need their listed service or Docker access. The README lists what each sample shows. `samples/code/` holds two more that build
 and load Java ([TESTING-YOUR-JAVA.md](TESTING-YOUR-JAVA.md)).
+
+### Every command and option
+
+`striim-test <command> --help` prints the same list. `--targets PATH` (all but `fetch`) names your
+project manifest; unset, `GOLD_TARGETS`, and with neither, this clone's own cases.
+
+| Command | Option | What it does |
+|---|---|---|
+| `striim-test run [PATH]` | `PATH` | only the cases under this case dir, `test.yaml` or folder of cases, relative to the working directory |
+| | `--tier TIER` | only this tier: `live`, `integration`, `perf`, or a tier a project runner declares; default `live` and `integration` |
+| | `--suite SUITE` | only the cases under this folder, relative to the project root and inside a tier's case root; or the name of a project runner |
+| | `--case ID ...` | only these cases, by **id**: what `striim-test list` prints, the manifest `name:`, or the case dir relative to the project root, as in `striim-test run --case samples/live/01-plain-replication` |
+| | `--parallel` | three tests at a time; not with the perf tier |
+| | `--keep-resources` | keep each test's app, tables and slots whatever the result |
+| | `--dry-run` | print the selection and deploy nothing (writes only a run record) |
+| `striim-test list` | `--tier`, `--suite` | as for `run`; prints what a run would select and deploys nothing |
+| `striim-test doctor` | `--case PATH ...` | check the settings, Striim and the services these cases require. Here `--case` is a **path** (a case dir, its `test.yaml`, or a folder of cases), not an id |
+| | `--strict` | fail, rather than warn, on anything that would skip a selected case |
+| `striim-test fetch` | `--gcs-prefix`, `--destination`, `--endpoint` | download and verify a published example ([RUN-A-DOWNLOADED-EXAMPLE.md](RUN-A-DOWNLOADED-EXAMPLE.md)) |
 
 ## 8. Stop what the runs left up
 
