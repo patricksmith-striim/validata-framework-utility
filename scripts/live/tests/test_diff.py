@@ -544,3 +544,23 @@ def test_a_source_unreadable_at_the_timeout_keeps_every_record():
                     timeout=0, poll=0)
     assert "diff not satisfied" in str(ei.value)
     assert len(ei.value.records) == 1
+
+
+# ---- surplus data: a target AHEAD of its source is never a pass ------------------------------
+
+@pytest.mark.parametrize("admin", [FakePg, _SlowCountingPg], ids=["full-read", "count-first"])
+def test_a_target_with_a_row_the_source_lacks_never_passes(admin):
+    """Without `exact:` the distinct row SETS must be equal, not the source a subset of the target:
+    a writer that leaks a row the source never had has not converged. With the count opt-in the
+    target's count (2) is above the source's distinct rows (1), so the full read decides."""
+    pg = admin({"s.src": [{"id": "1"}], "s.tgt": [{"id": "1"}, {"id": "2"}]})
+    with pytest.raises(AssertionFailed, match=r"\|src\|=1 \|tgt\|=2") as ei:
+        assert_diff({"postgres-source": pg}, [{"source": "s.src", "target": "s.tgt"}], timeout=0, poll=0)
+    assert [r["status"] for r in ei.value.records] == ["failed"]
+
+
+def test_a_target_with_a_changed_row_never_passes():
+    pg = FakePg({"s.src": [{"id": "1", "v": "a"}], "s.tgt": [{"id": "1", "v": "b"}]})
+    with pytest.raises(AssertionFailed, match=r"\|src\|=1 \|tgt\|=1") as ei:
+        assert_diff({"postgres-source": pg}, [{"source": "s.src", "target": "s.tgt"}], timeout=0, poll=0)
+    assert [r["status"] for r in ei.value.records] == ["failed"]

@@ -350,3 +350,22 @@ def test_a_plain_compare_still_catches_a_section_length_change():
     expected = [{"data": {"values": [1], "present": [True]}}]
     with pytest.raises(waevent.WAEventMismatch, match="length mismatch"):
         waevent.compare(emitted, expected)
+
+
+# --- surplus output: what the operator emits beyond the golden is a mismatch ------------------
+
+def test_an_extra_emitted_event_is_a_count_mismatch():
+    emitted = _events(None, None)
+    expected = _events(None)
+    with pytest.raises(waevent.WAEventMismatch, match=r"event count mismatch: expected 1 event\(s\), got 2"):
+        waevent.compare(emitted, expected)
+
+
+@pytest.mark.parametrize("section", ["metadata", "userdata"])
+def test_an_unexpected_emitted_key_is_a_mismatch(section):
+    def leak(e):
+        e[section]["Leaked"] = "x"
+    emitted = _events(leak)
+    expected = _events(None)
+    with pytest.raises(waevent.WAEventMismatch, match=rf"event 0: {section} has unexpected key 'Leaked'"):
+        waevent.compare(emitted, expected)
