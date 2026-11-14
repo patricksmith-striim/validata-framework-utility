@@ -106,3 +106,13 @@ def test_perf_dir_stays_on_the_collected_tree_under_another_framework_home(tmp_p
     assert (fw / "live" / "livetest").is_dir()
     assert _run(_mod("inttest.plugin", "_PERF_DIR"), {"SLT_FRAMEWORK_HOME": str(fw)},
                 tmp_path) == INT / "perf"
+
+
+
+def test_the_cli_and_a_session_share_the_compose_lock_under_a_stack_prefix(tmp_path, monkeypatch):
+    # `start`/`stop` must serialise with a session's `compose up` on the same stack.
+    from inttest import cli, plugin
+    monkeypatch.setenv("SLT_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("INT_STACK_PREFIX", "alt")
+    assert cli._lock_file() == plugin._compose_lock_path()
+    assert cli._lock_file().name == ".alt-int-compose.lock"

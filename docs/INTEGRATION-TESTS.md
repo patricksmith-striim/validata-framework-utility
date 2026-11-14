@@ -584,7 +584,9 @@ assert:
 - **`match` is a list of rows**, each a list of column values, in the shape `dbroutes.query_rows`
   returns. Values are normalised losslessly: `Decimal` → string (never a float — a writer that
   refuses a value not fitting a column's scale is asserting about exact digits), temporals → ISO
-  8601 keeping any offset, `bytes` → lowercase hex.
+  8601 keeping any offset, `bytes` → lowercase hex. The rows compare as `assert.data` values do:
+  `true` is not `1`, and `5.0` is not `5`, so state each value as the driver returns it (cast a
+  column to text in the query when engines disagree).
 - **To FEED bytes, use `{"$hex": "00ff"}`** in an input fixture's `values`. JSON has no byte type,
   so without it every value a case could feed was a string, a number, a boolean or null — binary
   was inexpressible rather than untested. It must be an object with that reserved key: a bare
@@ -707,6 +709,9 @@ assert:
 - **It cannot be combined with `data:`, `acked:`, `monitor:`, `restarts:`, `replayed:`,
   `exception_store:` or `jmx:`.** A failed drive writes no run report and emits nothing, so those
   have nothing to read.
+- **An `op:` case without `target:` has no input on this path.** The operator is driven with no
+  events, so only a refusal at construction or start can be asserted; a refusal that needs an
+  event needs a `target:` case.
 - **`target:` is allowed, and is how a rollback is proved.** The database survives the failure:
   query the table and the checkpoint row to show the failing window landed nothing.
 

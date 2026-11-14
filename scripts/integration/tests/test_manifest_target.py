@@ -544,7 +544,8 @@ assert:
     assert load_manifest(path).assert_.expect_error == "matched 2 tables"
 
 
-def test_expect_error_with_expect_log_warns_that_the_log_is_ignored(tmp_path):
+def test_expect_error_with_expect_log_is_refused(tmp_path):
+    # The failure path never reads the log, so the key would be declared and never evaluated.
     path, _ = _write(tmp_path, BASE + """
 target:
   input: input/events.json
@@ -552,8 +553,8 @@ assert:
   expect_error: 'matched 2 tables'
   expect_log: 'CommitPolicy is set to'
 """)
-    with pytest.warns(UserWarning, match="'assert.expect_log' is ignored when 'assert.expect_error'"):
-        assert load_manifest(path).assert_.expect_error == "matched 2 tables"
+    with pytest.raises(ManifestError, match="'assert.expect_log' is never evaluated beside 'assert.expect_error'"):
+        load_manifest(path)
 
 
 def test_expect_error_alone_does_not_warn(tmp_path):
@@ -1310,3 +1311,48 @@ def test_every_variant_rendering_a_specific_expect_error_loads(tmp_path):
     path, _ = _write(tmp_path, REFUSE.format(oracle="'ORA-01400'"))
     assert [v.tokens["V_MSG"] for v in load_manifest(path).variants] == [
         "null value in column", "ORA-01400"]
+
+
+# --- expect_log is evaluated only on a drive that runs: `data:`, or a `target:` drive -------------
+
+OP = """
+name: op-case
+op:
+  jar: java/OpenProcessors/SomeOp
+"""
+
+
+def test_expect_log_on_a_smoke_only_op_case_is_refused(tmp_path):
+    # A smoke-only op case never drives the operator, so nothing it logs is ever read.
+    path, _ = _write(tmp_path, OP + """
+assert:
+  smoke: true
+  expect_log: 'a line the operator must log'
+""")
+    with pytest.raises(ManifestError, match="'assert.expect_log' is never evaluated on a smoke-only case"):
+        load_manifest(path)
+
+
+def test_expect_log_beside_data_loads(tmp_path):
+    path, test_dir = _write(tmp_path, OP + """
+assert:
+  data:
+    - input: in.json
+      match: out.json
+  expect_log: 'a line the operator must log'
+""")
+    for name in ("in.json", "out.json"):
+        (test_dir / name).write_text("[]")
+    assert load_manifest(path).assert_.expect_log == ["a line the operator must log"]
+
+
+def test_expect_log_on_a_smoke_target_case_loads(tmp_path):
+    # The target drive runs for a smoke target case, and reads the log.
+    path, _ = _write(tmp_path, BASE + """
+target:
+  input: input/events.json
+assert:
+  smoke: true
+  expect_log: 'set-based apply path backed out'
+""")
+    assert load_manifest(path).assert_.expect_log == ["set-based apply path backed out"]

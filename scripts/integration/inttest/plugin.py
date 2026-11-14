@@ -1760,6 +1760,37 @@ def _redacted_failure(item, excinfo):
                                   redact_mod.known_secrets(extra=extra))
 
 
+def _note_variants(config, m) -> None:
+    """Record a collected case's variant names, for `pytest_collection_finish`'s INT_VARIANT check."""
+    if m.variants:
+        seen = config.stash.setdefault(_VARIANTS_SEEN, {})
+        seen[m.name] = [v.name for v in m.variants]
+
+
+_VARIANTS_SEEN = pytest.StashKey[dict]()
+
+
+def pytest_collection_finish(session):
+    """`INT_VARIANT` narrows every variants case to the variant it names. A name that matched no
+    variant of any collected case dropped them all and exited 0 without a word, which reads as a
+    passing run of fewer cases: it is a usage error. Otherwise one line says what was narrowed."""
+    only = manifest_mod._only_variant()
+    if not only:
+        return
+    seen = session.config.stash.get(_VARIANTS_SEEN, {})
+    matched = [name for name, variants in seen.items() if only in variants]
+    if seen and not matched:
+        names = sorted({v for variants in seen.values() for v in variants})
+        raise pytest.UsageError(
+            f"INT_VARIANT={only} names no variant of the {len(seen)} collected case(s) that "
+            f"declare variants (their variants: {', '.join(names)}); those cases would not run. "
+            f"Fix the name, or unset INT_VARIANT.")
+    tr = session.config.pluginmanager.get_plugin("terminalreporter")
+    if tr is not None:
+        tr.write_line(f"[integration] INT_VARIANT={only}: running only that variant of "
+                      f"{len(matched)} case(s)")
+
+
 class IntYamlFile(pytest.File):
     """A pytest.File subclass for test.yaml manifests (SPEC §3). Parsing/normalization
     is entirely `inttest.manifest.load_manifest`'s job; this class only turns a parse
@@ -1770,6 +1801,7 @@ class IntYamlFile(pytest.File):
             test_manifest = manifest_mod.load_manifest(self.path)
         except manifest_mod.ManifestError as e:
             pytest.fail(str(e))
+        _note_variants(self.config, test_manifest)
         for suffix, runs, requires in _group_items(test_manifest):
             yield IntYamlItem.from_parent(
                 self,
@@ -2172,12 +2204,9 @@ class IntYamlItem(pytest.Item):
         if "ConfigFile" in props:
             props["ConfigFile"] = render_config_file(props["ConfigFile"], tok)
 
-        if m.target is not None:
-            raw_input = Path(m.target.input_path).read_text()
-        elif m.assert_.data:
-            raw_input = Path(m.assert_.data[0].input_path).read_text()
-        else:
-            raw_input = "[]"
+        # An op: case without target: has no input for the failure path (load refuses `data:`
+        # beside expect_error), so only a refusal at construction or start can be asserted there.
+        raw_input = Path(m.target.input_path).read_text() if m.target is not None else "[]"
         input_events = waevent_mod.load(tokens_mod.render(raw_input, tok))
 
         try:
@@ -2592,7 +2621,8 @@ class IntYamlItem(pytest.Item):
             raw_expected = tokens_mod.render(Path(spec.match_path).read_text(), tok)
             expected = json.loads(raw_expected)
             actual = _jsonable_rows(rows)
-            if actual != expected:
+            # Typed, as assert.data compares: `True` is not `1` and `5.0` is not `5`.
+            if not waevent_mod._same(actual, expected):
                 pytest.fail(
                     f"{m.name}{at}: assert.target mismatch against {route!r}\n"
                     f"  query:    {shown}\n"
@@ -2834,6 +2864,7 @@ class PerfYamlFile(pytest.File):
         # §88's complaint that a fanned-out case reports `1 passed` whether it ran one run or
         # twenty -- here twenty runs are twenty reported items.
         m = perf_manifest.test_manifest
+        _note_variants(self.config, m)
         for variant, overrides in m.runs():
             yield PerfYamlItem.from_parent(
                 self,

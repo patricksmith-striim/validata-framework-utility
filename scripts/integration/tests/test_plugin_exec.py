@@ -35,7 +35,9 @@ class _Pg:
 
 
 def drive(*args, **kwargs):
-    log("drive", target=kwargs.get("target") is not None)
+    events = args[2] if len(args) > 2 else kwargs.get("input_events")
+    log("drive", target=kwargs.get("target") is not None,
+        inputs=(len(events) if isinstance(events, list) else None))
     if "error" in SC:
         error = H.HarnessError(SC["error"])
         error.failure = SC.get("failure")   # what drive() reads back from the run's errorFile
@@ -178,11 +180,32 @@ def test_an_expect_error_that_renders_empty_or_too_broad_fails_the_case(pytester
     assert "drive" not in [e["event"] for e in events]
 
 
-@pytest.mark.parametrize("rows,passes", [([[1]], True), ([[2]], False), ([], False)])
+# [[True]] and [[1.0]] equal [[1]] under Python's ==: the rows compare as assert.data's values do.
+@pytest.mark.parametrize("rows,passes", [([[1]], True), ([[2]], False), ([], False),
+                                         ([[True]], False), ([[1.0]], False)])
 def test_the_target_rows_decide_a_target_case(pytester, monkeypatch, tmp_path, rows, passes):
     _, failure, _ = run_case(pytester, monkeypatch, tmp_path, TARGET_ROWS_CASE, {
         "returns": {"ackedEvents": 1, "acknowledgeable": True}, "rows": rows}, TARGET_FILES)
     assert (failure is None) is passes, failure
+
+
+OP_REFUSE_CASE = """
+name: op-refuse
+purpose: p
+op: {jar: java/OpenProcessors/X}
+assert:
+  expect_error: 'unsupported operation DELETE'
+"""
+
+
+def test_expect_error_on_an_op_case_drives_the_operator_with_no_events(pytester, monkeypatch, tmp_path):
+    """The documented limit: an op: case without target: has no input for the failure path, so
+    only a refusal at construction or start can be asserted."""
+    _, failure, events = run_case(pytester, monkeypatch, tmp_path, OP_REFUSE_CASE, {
+        "error": "exited 1",
+        "failure": "java.lang.IllegalStateException: unsupported operation DELETE\n"}, {})
+    assert failure is None, failure
+    assert [e["inputs"] for e in events if e["event"] == "drive"] == [0]
 
 
 @pytest.mark.parametrize("emitted,passes", [(1, True), (True, False), (1.0, False)])

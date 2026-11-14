@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import itertools
 import re
-import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -977,11 +976,17 @@ def _normalize_assert(raw, test_dir: Path, path, *, is_source: bool = False,
 
     if expect_error is not None and expect_log:
         # The failure path asserts the error text and `target:` only; `expect_log` is not read.
-        warnings.warn(
-            f"{path}: 'assert.expect_log' is ignored when 'assert.expect_error' is set -- the "
+        raise ManifestError(
+            f"{path}: 'assert.expect_log' is never evaluated beside 'assert.expect_error' -- the "
             f"failure path does not check what the operator logged. Put the expected text in "
-            f"'expect_error', or move 'expect_log' to a case whose run succeeds.",
-            UserWarning, stacklevel=2)
+            f"'expect_error', or move 'expect_log' to a case whose run succeeds.")
+    if expect_log and not data and not is_target:
+        # The log is read only from a drive: the `data:` drive or the `target:` drive. A
+        # smoke-only op case never drives the operator, so the key would be declared and inert.
+        raise ManifestError(
+            f"{path}: 'assert.expect_log' is never evaluated on a smoke-only case -- it never "
+            f"drives the operator, so nothing it logs is read. Add an 'assert.data' entry, or "
+            f"move 'expect_log' to a case that drives it.")
 
     return AssertSpec(data=data, smoke=smoke, gcs_objects=gcs_objects, target=target, acked=acked,
                       restarts=restarts, replayed=replayed, expect_error=expect_error,

@@ -183,7 +183,8 @@ SECTIONS = (
                                    "`opt_in_env`."),
         ("INT_VARIANT", "unset: every variant",
          "Run only this variant of each case, to iterate on one engine without starting every "
-         "database. A name no case defines runs nothing."),
+         "database. A name that matches no variant of any collected case is a usage error; "
+         "otherwise the run prints the narrowing."),
         ("INT_EMPTY_SELECTION_OK", "unset",
          "`1`: a run whose `-m` deselects every item exits 0, not 5 (for a runner's marker-split "
          "passes)."),
