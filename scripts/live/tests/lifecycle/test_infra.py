@@ -993,3 +993,57 @@ def test_resolve_service_exclusive_passes_through(tmp_path):
     assert infra.resolve_service(None, "postgres", {}, set(),
                                  lambda name, env, started, progress=None: legacy.append(name) or "l") == "l"
     assert legacy == ["postgres"]
+
+
+# ---------------------------------------------------------------- docker outside the registry lock; orphaned stacks
+
+def test_the_leftover_docker_ps_runs_outside_the_port_registry_lock():
+    # A hung `docker ps` inside the registry lock made every other declaration on the port time out.
+    from filelock import FileLock, Timeout
+    held = []
+
+    def docker(argv):
+        probe = FileLock(str(infra._registry_path(infra._lock_dir(), 9080)))
+        try:
+            probe.acquire(timeout=0)
+            probe.release()
+            held.append(False)
+        except Timeout:
+            held.append(True)
+        return SimpleNamespace(stdout="", returncode=0)
+
+    decl = infra.declare(_env(SLT_INFRA_OWNERSHIP="exclusive", SLT_RUN_EPOCH="r-ps"), run=docker)
+    decl.release()
+    assert held and not any(held), held
+
+
+def test_exclusive_declaration_names_an_orphaned_exclusive_stack(capsys):
+    orphan = "x0123abcd"
+
+    def docker(argv):
+        if argv[-1] == "-q":                               # the allocated prefix: nothing left over
+            return SimpleNamespace(stdout="", returncode=0)
+        return SimpleNamespace(stdout=f"{orphan}-slt-postgres\n{orphan}-slt-striim\nslt-kafka\n", returncode=0)
+
+    decl = infra.declare(_env(SLT_INFRA_OWNERSHIP="exclusive", SLT_RUN_EPOCH="r-orphan"), run=docker)
+    decl.release()
+    err = capsys.readouterr().err
+    assert f"{orphan}-slt-postgres" in err and f"{orphan}-slt-striim" in err and "slt-kafka" not in err
+    assert f"SLT_STACK_PREFIX={orphan} python -m livetest.cli stop all" in err
+
+
+def test_a_live_exclusive_run_on_another_port_is_not_named_an_orphan(capsys):
+    run_id = "live-elsewhere"
+    live = "x" + hashlib.sha256(run_id.encode()).hexdigest()[:8]
+    owner = infra._lock_dir() / ".slt-endpoint-9081.exclusive.owner"
+    owner.parent.mkdir(parents=True, exist_ok=True)
+    owner.write_text(json.dumps({"runId": run_id, "pid": os.getppid()}))      # a live holder
+
+    def docker(argv):
+        if argv[-1] == "-q":
+            return SimpleNamespace(stdout="", returncode=0)
+        return SimpleNamespace(stdout=f"{live}-slt-postgres\n", returncode=0)
+
+    decl = infra.declare(_env(SLT_INFRA_OWNERSHIP="exclusive", SLT_RUN_EPOCH="r-other"), run=docker)
+    decl.release()
+    assert live not in capsys.readouterr().err

@@ -38,7 +38,7 @@ import subprocess
 import warnings
 from pathlib import Path
 
-from livetest import lockdir, opartifacts, opregistry, stack
+from livetest import dockercmd, lockdir, opartifacts, opregistry, stack
 from livetest import infra as _slt_infra   # the shared-service adapter, C7.1
 from livetest import striim_provision as _sp
 from livetest.manifest import CardinalityWarning, load_manifest
@@ -416,9 +416,7 @@ def _replaced_loaded_jars(ctx, client, builts) -> list[str]:
             continue
         want = opartifacts.file_sha256(built.path)
         for node in stack.app_nodes():
-            got = subprocess.run(["docker", "exec", node, "sha256sum",
-                                  f"/opt/striim/UploadedFiles/{built.name}"],
-                                 capture_output=True, text=True)
+            got = dockercmd.run(["docker", "exec", node, "sha256sum", f"/opt/striim/UploadedFiles/{built.name}"])
             words = (got.stdout or "").split()
             if got.returncode != 0 or not words or words[0] == want:
                 continue

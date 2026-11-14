@@ -15,7 +15,7 @@ from pathlib import Path
 
 from livetest import jarinputs, opjarrelease
 
-from livetest import paths, stack
+from livetest import dockercmd, paths, stack
 
 # OP artifact provisioning: build an OpenProcessor's (or UDF's) jar AGAINST A GIVEN
 # RELEASE (once per run, if missing/stale) and place it — plus its config JSON(s) —
@@ -372,7 +372,7 @@ def _running_java_major(run=None) -> str | None:
     # Best-effort major version of whatever `java` the ambient JAVA_HOME/PATH resolves
     # to, so a build that already matches JAVA_RELEASE doesn't need a JAVA_HOME
     # override. Returns None if it can't be determined (java missing / unparseable).
-    run = run or (lambda argv: subprocess.run(argv, capture_output=True, text=True))
+    run = run or dockercmd.run
     java_bin = "java"
     home = os.environ.get("JAVA_HOME")
     if home:
@@ -401,7 +401,7 @@ def resolve_build_java_home(java_release: str, run=None, platform: str | None = 
     if _running_java_major(run=run) == str(java_release):
         return None
     if (platform or os.uname().sysname) == "Darwin":
-        probe = run or (lambda argv: subprocess.run(argv, capture_output=True, text=True))
+        probe = run or dockercmd.run
         r = probe(["/usr/libexec/java_home", "-v", str(java_release)])
         out = (getattr(r, "stdout", "") or "").strip()
         if getattr(r, "returncode", 1) != 0 or not out:
@@ -445,7 +445,7 @@ def _require_platform_home(module_dir: Path, build_env: dict, release: dict) -> 
             f"lib/Platform-{version}.jar; set STRIIM_HOME to the Striim {version} install to build it")
 
 def _default_run(argv, cwd, env):
-    return subprocess.run(argv, cwd=cwd, env=env, capture_output=True, text=True)
+    return dockercmd.run(argv, timeout=dockercmd.BUILD_TIMEOUT_S, cwd=cwd, env=env)
 
 def _verify_striim_home(build_env: dict, release: dict) -> None:
     """Fail fast if STRIIM_HOME points at an install that does not contain STRIIM_VERSION.
@@ -869,7 +869,7 @@ def upload_artifacts(ctx, files: list[Path], run=None, keep_existing: bool = Fal
     # Striim loaded; replacing them is what lets an UNLOAD poison its loader (see
     # content_addressed).
     import shutil, stat
-    run = run or (lambda argv: subprocess.run(argv, capture_output=True, text=True))
+    run = run or dockercmd.run
 
     if ctx.mode == "docker":
         for f in files:
@@ -943,7 +943,7 @@ def restore_loaded_copy(ctx, name: str, run=None) -> None:
     identical bytes. A node with no copy (nothing loaded there) is left alone."""
     loaded = f"/opt/striim/.striim/OpenProcessor/{name}"
     if ctx.mode == "docker":
-        run = run or (lambda argv: subprocess.run(argv, capture_output=True, text=True))
+        run = run or dockercmd.run
         for node in stack.app_nodes():
             tmp = f"{_UPLOADED}/.{name}.restore.{os.getpid()}"
             result = run(["docker", "exec", "-u", "0", node, "sh", "-c",
@@ -1058,7 +1058,7 @@ def place_on_agent(ctx, files: list[Path], client=None, run=None, progress=None,
             progress("agent", "skipping agent jar placement: not a dockerized cluster")
         return
 
-    run = run or (lambda argv: subprocess.run(argv, capture_output=True, text=True))
+    run = run or dockercmd.run
     agent = stack.agent_container()
 
     if getattr(run(["docker", "inspect", agent]), "returncode", 1) != 0:
@@ -1127,7 +1127,7 @@ def delete_artifacts(ctx, names: list[str], run=None) -> None:
     bad = [n for n in names if not upload_name_ok(n)]
     if bad:
         raise OpArtifactError(f"refusing to delete upload name(s) outside UploadedFiles/: {bad}")
-    run = run or (lambda argv: subprocess.run(argv, capture_output=True, text=True))
+    run = run or dockercmd.run
     if ctx.mode == "docker":
         for name in names:
             for node in stack.app_nodes():

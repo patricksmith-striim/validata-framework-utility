@@ -15,9 +15,9 @@ from pathlib import Path
 
 import pytest
 import yaml
-from filelock import FileLock
+from filelock import FileLock, Timeout as _LockTimeout
 
-from livetest import lockdir, uiform
+from livetest import dockercmd, lockdir, uiform
 from livetest.manifest import load_manifest, TestManifest, ManifestError, VALID_DEPTHS, xfail_for_release, upload_name_ok
 from livetest.substitute import render
 from livetest.striim import StriimClient, probe_reachable, TERMINAL_STATUSES, POLL_TIMEOUT
@@ -428,8 +428,7 @@ def striim_url_tokens(ctx) -> dict:
     return {"STRIIM_WEB_URL": striim_web_url(ctx)}
 
 def _striim5_running() -> bool:
-    r = subprocess.run(["docker", "ps", "--filter", f"name=^{stack.striim_container()}$", "-q"],
-                       capture_output=True, text=True)
+    r = dockercmd.run(["docker", "ps", "--filter", f"name=^{stack.striim_container()}$", "-q"])
     return bool(r.stdout.strip())
 
 def _running_striim_version() -> str | None:
@@ -437,9 +436,7 @@ def _running_striim_version() -> str | None:
     # the stack prefix (`<prefix>-slt-striim:<version>`, striim_provision.image_ref) so two
     # checkouts cannot overwrite each other's; rsplit(":", 1) below takes the version whether or
     # not a prefix is present. None if not inspectable.
-    r = subprocess.run(["docker", "inspect", stack.striim_container(),
-                        "--format", "{{.Config.Image}}"],
-                       capture_output=True, text=True)
+    r = dockercmd.run(["docker", "inspect", stack.striim_container(), "--format", "{{.Config.Image}}"])
     img = r.stdout.strip()
     if r.returncode != 0 or ":" not in img:
         return None
@@ -656,10 +653,16 @@ def _resolve_striim(config):
         try:
             _sp.ensure_deps(_STRIIM_DIR, rel, progress=report)
             _sp.ensure_image(_STRIIM_DIR, rel, progress=report)
-            _sp.cluster_up(_STRIIM_DIR, rel, progress=report)
-            # Record that WE started the cluster as soon as it's up, so it is torn down at
-            # session end even if a later step below returns via _fail().
+            # Record that WE started the cluster before `compose up` starts, so it is torn down at
+            # session end even if a later step below returns via _fail(), or Ctrl-C stops the up
+            # itself with containers already created. A failed up is not recorded.
+            _was_provisioned = getattr(config, "_slt_striim_provisioned", False)
             config._slt_striim_provisioned = True
+            try:
+                _sp.cluster_up(_STRIIM_DIR, rel, progress=report)
+            except Exception:
+                config._slt_striim_provisioned = _was_provisioned
+                raise
         except _tryout.TryoutError as e:
             _clear_progress(); _hard_fail(f"could not provision Docker cluster: {e}"); return False
         except Exception as e:
@@ -702,7 +705,13 @@ def _resolve_striim(config):
     if native_only and tryouts:
         return _hard_fail(f"{_tryout.TRYOUT_ENV} needs the Docker cluster, and SLT_STRIIM_NATIVE_ONLY=1 uses "
                           f"only the Striim at STRIIM_URL")
-    with FileLock(str(_cluster_provision_lock()), mode=lockdir.file_mode()):
+    _cluster_lock = FileLock(str(_cluster_provision_lock()), mode=lockdir.file_mode(), timeout=dockercmd.LOCK_WAIT_S)
+    try:
+        _cluster_held = _cluster_lock.acquire()     # its context releases it once, as `with FileLock` did
+    except _LockTimeout:
+        return _fail(f"cluster provisioning lock {_cluster_provision_lock()} not acquired within "
+                     f"{dockercmd.LOCK_WAIT_S:.0f}s: another process is still provisioning the Striim cluster")
+    with _cluster_held:
         if _probe_retry():
             if not native_only and _striim5_running():
                 mode = "docker"
@@ -969,7 +978,7 @@ def _node_log_marks(ctx, run=None) -> dict:
     """
     if getattr(ctx, "mode", None) != "docker":
         return {}
-    run = run or (lambda argv: subprocess.run(argv, capture_output=True, text=True))
+    run = run or dockercmd.run
     marks = {}
     for node in stack.app_nodes():
         try:
@@ -993,7 +1002,7 @@ def _node_log_since(ctx, marks: dict, run=None, nbytes: int = 20000, errors: lis
     """
     if getattr(ctx, "mode", None) != "docker":
         return ""
-    run = run or (lambda argv: subprocess.run(argv, capture_output=True, text=True))
+    run = run or dockercmd.run
     out = []
     for node in stack.app_nodes():
         mark = marks.get(node)
@@ -1055,7 +1064,7 @@ def _node_log_tail(ctx, run=None, nbytes: int = 20000) -> str:
     # Striim returns "" (the loader-poisoning cascade is a cluster phenomenon).
     if getattr(ctx, "mode", None) != "docker":
         return ""
-    run = run or (lambda argv: subprocess.run(argv, capture_output=True, text=True))
+    run = run or dockercmd.run
     out = []
     for node in stack.app_nodes():
         try:
@@ -1234,9 +1243,7 @@ def _make_fake_gcp_key(token_uri: str, project_id: str = "test-project") -> str:
     # so we point it at the services/gcs fake token server (which returns a dummy
     # bearer token the emulator ignores). Never a real credential.
     import json, subprocess
-    r = subprocess.run(
-        ["openssl", "genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048"],
-        capture_output=True, text=True)
+    r = dockercmd.run(["openssl", "genpkey", "-algorithm", "RSA", "-pkeyopt", "rsa_keygen_bits:2048"])
     pem = r.stdout
     if r.returncode != 0 or not pem.strip():
         # An empty PEM yields a structurally-invalid key JSON whose failure surfaces deep
@@ -1284,8 +1291,8 @@ def ensure_fake_gcp_key(config, ctx, *, key_name: str = _FAKE_KEY_NAME,
             # The single-topology apps deploy on the `default` group (primary + node).
             for node in stack.app_nodes():
                 try:
-                    subprocess.run(["docker", "cp", path, f"{node}:/opt/striim/UploadedFiles/{key_name}"],
-                                   capture_output=True, text=True, check=True)
+                    dockercmd.run(["docker", "cp", path, f"{node}:/opt/striim/UploadedFiles/{key_name}"],
+                                  check=True)
                 except subprocess.CalledProcessError as exc:
                     raise RuntimeError(f"fake key upload to {node} ({key_name}) failed: {exc.stderr}") from exc
         else:  # native Striim
@@ -1336,7 +1343,7 @@ def _gcs_endpoint_ip(ctx, run=None) -> str:
     # container reaches host.docker.internal by; native Striim reaches it at 127.0.0.1.
     if ctx.mode != "docker":
         return "127.0.0.1"
-    run = run or (lambda argv: subprocess.run(argv, capture_output=True, text=True))
+    run = run or dockercmd.run
     # `getent ahostsv4` (IPv4-only): plain `getent hosts` can return an IPv6 ULA
     # (e.g. fdc4:...), which yields an unbracketed IPv6 endpoint the GCS client's
     # StorageOptions mangles into an opaque "storage-http" StorageException. The GCS
@@ -4349,7 +4356,7 @@ def _slt_adopt_exclusive_stack(config, run=None) -> None:
     prefix = stack.prefix()
     if not prefix:
         return
-    run = run or (lambda argv: subprocess.run(argv, capture_output=True, text=True))
+    run = run or dockercmd.run
     try:
         r = run(["docker", "ps", "-a", "--filter", f"name=^{prefix}-slt-", "--format", "{{.Names}}"])
         if getattr(r, "returncode", 1):
@@ -4382,7 +4389,10 @@ def _slt_exclusive_stack_unaccounted(config, exitstatus) -> bool:
     ready = getattr(config, "_slt_nodes_ready", set())
     return bool(getattr(config, "_slt_unreported_worker", False)
                 or ready - getattr(config, "_slt_nodes_reported", set())
-                or (exitstatus == pytest.ExitCode.INTERRUPTED and (ready or getattr(config, "_slt_distributed", False))))
+                or (exitstatus == pytest.ExitCode.INTERRUPTED and (ready or getattr(config, "_slt_distributed", False)))
+                # A serial run records a service only once its bring-up starts, and a Ctrl-C or an internal
+                # error can stop it anywhere: whatever the run did not finish cleanly is found by its prefix.
+                or exitstatus not in (pytest.ExitCode.OK, pytest.ExitCode.NO_TESTS_COLLECTED))
 
 
 def _slt_node_id(node):

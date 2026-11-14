@@ -23,7 +23,7 @@ import subprocess
 import os
 import time
 
-from livetest import stack
+from livetest import dockercmd, stack
 
 # Statuses from which a START is meaningful. A `stop` leaves the app DEPLOYED (or CREATED if
 # the platform undeployed it); a `kill` leaves whatever the dying JVM last persisted, and the
@@ -101,7 +101,7 @@ def verify_timeout(manifest_timeout) -> float:
 
 
 def _sh(argv, run=None):
-    run = run or (lambda a: subprocess.run(a, capture_output=True, text=True))
+    run = run or dockercmd.run
     return run(argv)
 
 

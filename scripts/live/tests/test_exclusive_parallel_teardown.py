@@ -157,3 +157,26 @@ def test_a_worker_reported_twice_does_not_hide_another_workers_missing_report(mo
         P.pytest_testnodedown(_node(controller, "gw0", workeroutput=out), None)
     P.pytest_sessionfinish(_session(controller), 1)
     assert ("compose_down", "xabc-slt-kafka") in calls
+
+
+@pytest.mark.parametrize("exitstatus", [pytest.ExitCode.INTERRUPTED, pytest.ExitCode.TESTS_FAILED,
+                                        pytest.ExitCode.INTERNAL_ERROR])
+def test_a_serial_exclusive_run_that_did_not_finish_cleanly_tears_down_by_stack_identity(calls, stack_on_docker,
+                                                                                        exitstatus):
+    # No worker ever reported ready: a serial run. A bring-up interrupted before it recorded its service is
+    # found by the run's own prefix.
+    controller = _controller()
+    P.pytest_sessionfinish(_session(controller), exitstatus)
+    assert calls == [("compose_down", "xabc-slt-kafka"), ("cluster_down", None)]
+
+
+@pytest.mark.parametrize("exitstatus", [pytest.ExitCode.OK, pytest.ExitCode.NO_TESTS_COLLECTED])
+def test_a_serial_exclusive_run_that_finished_cleanly_needs_no_prefix_scan(monkeypatch, calls, exitstatus):
+    monkeypatch.setattr(P.subprocess, "run", lambda *a, **k: pytest.fail("no prefix scan"))
+    P.pytest_sessionfinish(_session(_controller()), exitstatus)
+    assert calls == []
+
+
+def test_a_serial_shared_run_that_was_interrupted_adopts_nothing(calls, stack_on_docker):
+    P.pytest_sessionfinish(_session(_controller("shared")), pytest.ExitCode.INTERRUPTED)
+    assert calls == []

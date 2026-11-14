@@ -30,7 +30,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-import subprocess
+import re
 import sys
 import time
 import uuid
@@ -40,7 +40,7 @@ from urllib.parse import urlparse
 
 from filelock import FileLock, Timeout
 
-from livetest import lockdir, stack
+from livetest import dockercmd, lockdir, stack
 
 OWNERSHIP_ENV = "SLT_INFRA_OWNERSHIP"
 MODES = ("exclusive", "shared")
@@ -93,7 +93,7 @@ def _pid_alive(pid: int) -> bool:
 
 
 def _docker_ps(argv):
-    return subprocess.run(argv, capture_output=True, text=True)
+    return dockercmd.run(argv)
 
 
 @dataclass
@@ -354,9 +354,15 @@ def _declare_exclusive(env, port: int, lock_dir: Path, run, pid_alive) -> Infra:
     owner_path = Path(str(lease_path) + ".owner")
     # r1 F4: each attempt either holds the lease or joins it; a joiner that finds the lease released meanwhile
     # decides again from the top, so every outcome is checked against the endpoint's current registry.
+    leftover = None             # the allocated prefix's containers, read outside the registry lock
     for _attempt in range(_DECLARE_ATTEMPTS):
-        held = _hold_exclusive(env, port, lock_dir, run, pid_alive, run_id, allocated, lease_path, owner_path)
+        held = _hold_exclusive(env, port, lock_dir, run, pid_alive, run_id, allocated, lease_path, owner_path,
+                               leftover)
+        if held is _SCAN:
+            leftover = _leftover_containers(run, allocated)
+            continue
         if held is not None:
+            _report_orphaned_stacks(run, lock_dir, allocated, pid_alive)
             return held
         joined = _join_exclusive(env, port, lock_dir, run_id, allocated, lease_path, owner_path, pid_alive)
         if joined is not None:
@@ -366,9 +372,66 @@ def _declare_exclusive(env, port: int, lock_dir: Path, run, pid_alive) -> Infra:
         f"{_DECLARE_ATTEMPTS} times while this process declared")
 
 
-def _hold_exclusive(env, port, lock_dir, run, pid_alive, run_id, allocated, lease_path, owner_path) -> Infra | None:
+_SCAN = object()
+_EXCLUSIVE_NAME = re.compile(r"^(x[0-9a-f]{8})-slt-")
+
+
+def _leftover_containers(run, allocated: str) -> str:
+    out = run(["docker", "ps", "-a", "--filter", f"name=^{allocated}-slt-", "-q"])
+    return (getattr(out, "stdout", "") or "").strip()
+
+
+def _live_exclusive_prefixes(lock_dir: Path, pid_alive) -> set:
+    """The stack prefixes of exclusive runs that still have a live holder or member, on any port."""
+    live = set()
+    for owner_path in lock_dir.glob(".slt-endpoint-*.exclusive.owner"):
+        owner = _read_owner(owner_path) or {}
+        run_id = owner.get("runId")
+        if not run_id:
+            continue
+        lease_path = Path(str(owner_path)[:-len(".owner")])
+        pid = owner.get("pid")
+        if (isinstance(pid, int) and pid_alive(pid)) or _live_members(lease_path, run_id, pid_alive):
+            live.add("x" + hashlib.sha256(run_id.encode("utf-8")).hexdigest()[:8])
+    return live
+
+
+def _report_orphaned_stacks(run, lock_dir: Path, allocated: str, pid_alive) -> None:
+    """Name the containers of earlier exclusive runs that no live process owns. Each run allocates a new
+    prefix, so nothing else would look for them again, and they keep their host ports. Reported on stderr,
+    never removed; a failed listing reports nothing."""
+    try:
+        out = run(["docker", "ps", "-a", "--filter", "name=^x", "--format", "{{.Names}}"])
+    except Exception:                   # noqa: BLE001 - a report, never a reason to refuse
+        return
+    if getattr(out, "returncode", 0):
+        return
+    stacks: dict = {}
+    for name in (getattr(out, "stdout", "") or "").split():
+        m = _EXCLUSIVE_NAME.match(name)
+        if m and m.group(1) != allocated:
+            stacks.setdefault(m.group(1), []).append(name)
+    if not stacks:
+        return
+    live = _live_exclusive_prefixes(lock_dir, pid_alive)
+    for prefix, names in sorted(stacks.items()):
+        if prefix in live:
+            continue
+        try:
+            sys.stderr.write(f"WARNING: containers of an earlier exclusive run are still on this machine and keep "
+                             f"their host ports: {', '.join(sorted(names))}; stop them with: "
+                             f"{_STOP_HINT.format(prefix=prefix)}\n")
+        except (OSError, ValueError):
+            pass
+
+
+def _hold_exclusive(env, port, lock_dir, run, pid_alive, run_id, allocated, lease_path, owner_path,
+                    leftover=None):
     """Acquire the free lease and run every check up to the owner/member write under the registry lock
-    (4.1 fix r2). ``None``: another process holds the lease (the registry lock is released again)."""
+    (4.1 fix r2). ``None``: another process holds the lease (the registry lock is released again).
+    ``_SCAN``: the lease was free but the allocated prefix's containers have not been listed yet; the lease is
+    released and the caller lists them outside the registry lock (``leftover``), then decides again. A
+    `docker ps` inside the lock made a hung Docker daemon time out every other declaration on the port."""
     lease = FileLock(str(lease_path), mode=lockdir.file_mode())
     registry = _registry(lock_dir, port)
     try:
@@ -390,8 +453,10 @@ def _hold_exclusive(env, port, lock_dir, run, pid_alive, run_id, allocated, leas
                 f"{OWNERSHIP_ENV}=exclusive refused: shared run(s) are registered on port {port} "
                 f"(pids {alive}, {_shared_dir(lock_dir, port)})")
         if not still:   # a same-run takeover keeps the run's own stack; anything else must find none
-            out = run(["docker", "ps", "-a", "--filter", f"name=^{allocated}-slt-", "-q"])
-            if (getattr(out, "stdout", "") or "").strip():
+            if leftover is None:
+                lease.release()
+                return _SCAN
+            if leftover:
                 raise InfraOwnershipError(
                     f"{OWNERSHIP_ENV}=exclusive refused: containers of the allocated prefix "
                     f"{allocated!r} already exist (a leftover stack); stop them first: "

@@ -10,7 +10,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from livetest import docker_disk, stack
+from livetest import docker_disk, dockercmd, stack
 from livetest.topology import parse_deployment_groups, Topology
 
 _DEFAULT_STRIIM_VERSION = "5.4.2"
@@ -345,7 +345,7 @@ def running_image_reason(container: str, version: str, run=None):
     running container must run that exact image. Returns a redeploy reason when the container's
     immutable image ID differs from the tag's image ID, or when either ID is unavailable (never a match); None when they are the same image."""
     from livetest import tryout
-    run = run or (lambda argv: subprocess.run(argv, capture_output=True, text=True))
+    run = run or dockercmd.run
     try:
         want = cluster_image_ref(version)     # the tryout image when SLT_STRIIM_TRYOUT_JARS is set
     except tryout.TryoutError as e:
@@ -570,7 +570,7 @@ def tryout_stock_check(run=None) -> tuple:
 
 
 def image_present(version: str = _DEFAULT_STRIIM_VERSION, run=None) -> bool:
-    run = run or (lambda argv: subprocess.run(argv, capture_output=True, text=True))
+    run = run or dockercmd.run
     out = run(["docker", "images", "-q", image_ref(version)])
     return bool((getattr(out, "stdout", "") or "").strip())
 
@@ -617,7 +617,7 @@ def image_inputs_match(version: str, striim_dir: Path, run=None) -> bool:
     next successful check. A failed `cp` is different and reads as STALE -- that is how an image
     built before /slt-build-inputs existed announces itself, and it is indistinguishable from a
     transient cp error, so the safe reading is the one that rebuilds."""
-    run = run or (lambda argv: subprocess.run(argv, capture_output=True, text=True))
+    run = run or dockercmd.run
     # Absent locally: `docker create` would try to PULL (there is no registry for this image),
     # which fails after a network timeout -- inside the provisioning FileLock, on what is
     # supposed to be the fast reuse path. Nothing to compare either way; ensure_image handles
@@ -718,7 +718,7 @@ def ensure_image(striim_dir: Path, release: dict | None = None, run=None, progre
     # ask it. Build args (STRIIM_VERSION, JDK_VERSION) come from the process env via
     # _env_override -- compose.yaml declares them as build.args.
     run = run or _stream
-    query = query_run or (lambda argv: subprocess.run(argv, capture_output=True, text=True))
+    query = query_run or dockercmd.run
     version = (release or {}).get("STRIIM_VERSION", _DEFAULT_STRIIM_VERSION)
     java_release = (release or {}).get("JAVA_RELEASE")
     manifest_mode = bool((os.environ.get(DEPS_MANIFEST_ENV) or "").strip())
@@ -834,8 +834,7 @@ def cluster_has_containers(striim_dir: Path, release: dict | None = None) -> boo
     runner here would silently read as "no containers"."""
     version = (release or {}).get("STRIIM_VERSION", _DEFAULT_STRIIM_VERSION)
     with _env_override({"STRIIM_VERSION": version}):
-        r = subprocess.run(["docker", "compose", *_compose_files(), "ps", "-aq"],
-                           cwd=str(striim_dir), capture_output=True, text=True)
+        r = dockercmd.run(["docker", "compose", *_compose_files(), "ps", "-aq"], cwd=str(striim_dir))
     if r.returncode:
         raise RuntimeError(f"could not ask Docker what the Striim project owns: "
                            f"{(r.stderr or r.stdout).strip()[-300:]}")
@@ -938,7 +937,7 @@ def app_nodes_generation(run=None) -> str:
     Best-effort by design: any failure yields "", which simply means records are not
     generation-scoped on that setup rather than that they are all discarded.
     """
-    run = run or (lambda argv: subprocess.run(argv, capture_output=True, text=True))
+    run = run or dockercmd.run
     stamps = []
     for node in stack.app_nodes():
         try:

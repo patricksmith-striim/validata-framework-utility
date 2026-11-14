@@ -516,10 +516,18 @@ def compose_lock() -> FileLock:
     nesting `with compose_lock:` around a call into services.docker (which also
     locks internally) is safe.
 
-    No timeout, as in the live tier and cli.py: a waiter blocks until the holder's bring-up
-    ends. A 120 s wait failed workers queued behind a Teradata boot (up to ~2 h under
-    emulation), and a timeout adds no protection -- a hung holder hangs the run either way."""
-    return FileLock(str(_compose_lock_path()))
+    Bounded by ``dockercmd.LOCK_WAIT_S`` (``_compose_filelock``), not 120 s: a 120 s wait failed workers
+    queued behind a Teradata boot (up to ~2 h under emulation). The holder's compose calls are bounded
+    too, so a waiter outlives any holder still making progress."""
+    return _compose_filelock()
+
+
+def _compose_filelock() -> FileLock:
+    """The compose lock, waited for at most ``dockercmd.LOCK_WAIT_S``: the holder's `down`, `up` and post-up
+    are each bounded, so a waiter outlives any holder still making progress, and a hung holder no longer hangs
+    every other worker forever."""
+    from livetest import dockercmd
+    return FileLock(str(_compose_lock_path()), timeout=dockercmd.LOCK_WAIT_S)
 
 
 def _ensure_up(name: str, lock: FileLock) -> bool:
@@ -629,6 +637,9 @@ def pytest_sessionfinish(session, exitstatus):
     controller (workers each reach sessionfinish independently and must not race each
     other's teardown), and never under INT_SHARED_SERVICES (a broker owns lifecycle).
 
+    Under SLT_INFRA_OWNERSHIP=shared nothing is torn down either (shared never tears a service down,
+    and another checkout may be using it); the services left running are printed.
+
     Under INT_KEEP_SERVICES (fast local iteration without re-provisioning containers
     between runs), the containers are deliberately left running -- but the registry
     is still cleared either way: keeping a service running hands its lifecycle over
@@ -651,10 +662,15 @@ def pytest_sessionfinish(session, exitstatus):
         return  # a worker, not the controller -- see live's plugin.py for the same guard
     if _docker_mod is None or not _started_registry().exists():
         return
-    lock = FileLock(str(_compose_lock_path()))
+    lock = _compose_filelock()
     with lock:
         started = _read_started()
-        if not os.environ.get("INT_KEEP_SERVICES"):
+        if _docker_mod.shared_ownership():
+            # SLT_INFRA_OWNERSHIP=shared: reuse what is running, start what is missing, never tear it down.
+            # Another checkout may be using a service this session started.
+            if started:
+                print(f"[integration] left running (SLT_INFRA_OWNERSHIP=shared): {', '.join(sorted(started))}")
+        elif not os.environ.get("INT_KEEP_SERVICES"):
             for name in started:
                 try:
                     _docker_mod.compose_down(name, lock)
@@ -1822,7 +1838,7 @@ class IntYamlItem(pytest.Item):
         # _ensure_up call during fixture SETUP (before runtest() ever runs) -- this
         # call is what SPEC §5 step 2 itself asks for and is a harmless idempotent
         # no-op if that already happened.
-        lock = FileLock(str(_compose_lock_path()))
+        lock = _compose_filelock()
         _provision_requires(m.name, self.requires, lock)
 
         # --- 3. Build/reuse the operator jar for the detected Striim release. ---
@@ -2900,7 +2916,7 @@ class PerfYamlItem(pytest.Item):
 
         # --- 2-3. Provision services, build the operator jar -- identical to
         # IntYamlItem, off this perf test.yaml's own manifest. ---
-        lock = FileLock(str(_compose_lock_path()))
+        lock = _compose_filelock()
         _provision_requires(m.name, m.requires, lock)
         self.artifact = artifact = _build_operator_jar(m.name, m.module_ref, report=rebuild_reasons.append)
 

@@ -51,6 +51,8 @@ from typing import Iterator
 
 from filelock import FileLock
 
+from livetest import dockercmd
+
 _HERE = Path(__file__).resolve().parent  # scripts/integration/inttest/
 _STARTED_REGISTRY_NAME = ".int-services-up.json"
 _PROVISION_REGISTRY_NAME = ".int-provision-registry.json"
@@ -156,7 +158,7 @@ def shared_ownership(env=None) -> bool:
 
 def _inspect(container: str, run=None) -> dict | None:
     """`docker container inspect` of one container, or None when it does not exist."""
-    run = run or (lambda argv: subprocess.run(argv, capture_output=True, text=True))
+    run = run or dockercmd.run
     try:
         r = run(["docker", "container", "inspect", container])
     except OSError:
@@ -302,12 +304,10 @@ def compose_up(service_name: str, lock: FileLock) -> None:
     env = _compose_up_env(service_name)
     sql = pgidle.policy_sql(env, "INT_PG_IDLE_TRANSACTION_TIMEOUT_MS", "intdb") if service_name == "postgres" else None
     compose = _checked_compose_file(service_name)
-    subprocess.run(
-        ["docker", "compose", "-f", str(compose), "up", "-d", "--wait"],
-        check=True, env=env,
-    )
+    dockercmd.run(["docker", "compose", "-f", str(compose), "up", "-d", "--wait"],
+                  timeout=dockercmd.COMPOSE_UP_TIMEOUT_S, check=True, capture=False, env=env)
     if sql:
-        pgidle.apply_policy(compose, env, "integration", sql, subprocess.run)
+        pgidle.apply_policy(compose, env, "integration", sql, dockercmd.run)
 
 
 
@@ -527,8 +527,7 @@ def container_exists(container: str) -> bool:
     # images, volumes and networks, and volumes/networks carry `.Name` -- so a VOLUME named
     # int-postgres would read as a surviving container (see the live tier's twin).
     try:
-        r = subprocess.run(["docker", "container", "inspect", "-f", "{{.Name}}", container],
-                           capture_output=True, text=True)
+        r = dockercmd.run(["docker", "container", "inspect", "-f", "{{.Name}}", container])
     except OSError:
         return False
     return r.returncode == 0
@@ -560,10 +559,8 @@ def compose_down(service_name: str, lock: FileLock) -> None:
         CalledProcessError: if `docker compose down` fails
         FileNotFoundError: if docker is not available
     """
-    subprocess.run(
-        ["docker", "compose", "-f", str(_compose_file(service_name)), "down", "-v"],
-        check=True,
-    )
+    dockercmd.run(["docker", "compose", "-f", str(_compose_file(service_name)), "down", "-v"],
+                  timeout=dockercmd.COMPOSE_DOWN_TIMEOUT_S, check=True, capture=False)
 
 
 def is_up(service_name: str) -> bool:
@@ -583,10 +580,8 @@ def is_up(service_name: str) -> bool:
     if not compose_file.exists():
         return False
     try:
-        r = subprocess.run(
-            ["docker", "compose", "-f", str(compose_file), "ps", "-q", "--status", "running"],
-            capture_output=True, text=True, check=True,
-        )
+        r = dockercmd.run(["docker", "compose", "-f", str(compose_file), "ps", "-q", "--status", "running"],
+                          check=True)
     except (subprocess.CalledProcessError, FileNotFoundError):
         return False
     return bool(r.stdout.strip())
@@ -739,7 +734,13 @@ def ensure_up_for_test(service_name: str, lock: FileLock) -> Iterator[None]:
     try:
         yield
     finally:
-        if started_here:
+        if started_here and shared_ownership():
+            # SLT_INFRA_OWNERSHIP=shared never tears a service down: hand it over, as the session does.
+            with lock:
+                started = _read_started()
+                started.discard(service_name)
+                _write_started(started)
+        elif started_here:
             ensure_down(service_name, lock)
 
 

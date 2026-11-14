@@ -5,7 +5,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from livetest import paths
+from livetest import dockercmd, paths
 
 # Python wrapper around the standalone Java decode harness
 # (tools/ggtrail-harness/TrailDumpHarness.java). GGTrailParser is read-only -- it has no
@@ -48,8 +48,8 @@ def ensure_built() -> str:
     if not cls.exists() or cls.stat().st_mtime < src.stat().st_mtime:
         if shutil.which("javac") is None:
             raise RuntimeError("javac not found on PATH -- the ggtrail validation harness needs a JDK")
-        subprocess.run(["javac", "-cp", classpath, "-d", str(hdir), str(src)],
-                       check=True, capture_output=True, text=True)
+        dockercmd.run(["javac", "-cp", classpath, "-d", str(hdir), str(src)],
+                      timeout=dockercmd.BUILD_TIMEOUT_S, check=True)
     return classpath
 
 

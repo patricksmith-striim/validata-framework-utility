@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from inttest import jarinputs, opjarrelease
+from livetest import dockercmd
 
 from inttest import paths
 
@@ -173,7 +174,7 @@ def _running_java_major(run=None) -> str | None:
     # Best-effort major version of whatever `java` the ambient JAVA_HOME/PATH resolves
     # to, so a build that already matches JAVA_RELEASE doesn't need a JAVA_HOME
     # override. Returns None if it can't be determined (java missing / unparseable).
-    run = run or (lambda argv: subprocess.run(argv, capture_output=True, text=True))
+    run = run or dockercmd.run
     java_bin = "java"
     home = os.environ.get("JAVA_HOME")
     if home:
@@ -203,7 +204,7 @@ def resolve_build_java_home(java_release: str, run=None, platform: str | None = 
     if _running_java_major(run=run) == str(java_release):
         return None
     if (platform or os.uname().sysname) == "Darwin":
-        probe = run or (lambda argv: subprocess.run(argv, capture_output=True, text=True))
+        probe = run or dockercmd.run
         r = probe(["/usr/libexec/java_home", "-v", str(java_release)])
         out = (getattr(r, "stdout", "") or "").strip()
         if getattr(r, "returncode", 1) != 0 or not out:
@@ -228,7 +229,7 @@ def resolve_build_java_home(java_release: str, run=None, platform: str | None = 
 
 
 def _default_run(argv, cwd, env):
-    return subprocess.run(argv, cwd=cwd, env=env, capture_output=True, text=True)
+    return dockercmd.run(argv, timeout=dockercmd.BUILD_TIMEOUT_S, cwd=cwd, env=env)
 
 
 def _verify_striim_home(build_env: dict, release: dict) -> None:
