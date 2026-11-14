@@ -133,7 +133,8 @@ assert:                                     # required
 
 Remaining optional keys: `password_properties:` (names `properties:` keys to wrap in `Password`),
 `requires:` (services: `postgres`, `mysql`, `mariadb`, `oracle`, `sqlserver`, `spanner`, `gcs`, `vertica`, or a
-connection-only `teradata`/`servicenow`; see [SERVICES.md](SERVICES.md)), `ddl:`/`seed:`
+connection-only `teradata`/`servicenow`; see [SERVICES.md](SERVICES.md); a name no services root
+defines is refused at load), `ddl:`/`seed:`
 (a filename, or a `{file, db}` list — `db` defaults to `postgres-source`; other routes are
 `oracle-source`/`spanner-google`/`spanner-postgres`, …), `types:` (source schemas by `TableName`, for
 `TypeResolver`-consuming ops — see below), `source:` (drive the op as a reader — see below),
@@ -148,8 +149,11 @@ the keys allowed, and `striim-test doctor --case` reports it. A misspelt `matrix
 default timeout or while meant to be disabled. A perf case follows the same rule, with
 `performance:` in place of `assert:` and without `setup:`, which it would not read.
 
-**`assert.data` is exact and type-strict.** `true` is not `1`, `5.0` is not `5`, and decimals are
-compared digit for digit, never through a float.
+**`assert.data` is exact, and strict about JSON types.** Values compare by JSON category: boolean,
+integer, decimal and string. `true` is not `1`, and `5.0` is not `5`. Decimals compare by exact
+value, never through a float, and scale is ignored, so `1.50` equals `1.5`. The Java numeric width
+is not compared: the harness writes an `Integer`, a `Long` and a `BigInteger` all as a JSON integer,
+and a `Double` and a `BigDecimal` both as a JSON decimal.
 
 **`types:`** declares the source schema for each `metadata.TableName` an operator will see:
 column names, in the order they occupy `data[]`/`before[]`. The harness mints a type UUID per
@@ -195,7 +199,9 @@ assert:
 Three behaviours worth knowing before you use them.
 
 1. **The two keys are not mirror images.** `ignore_fields` says *this field is volatile*: a
-   `data[i]` entry suppresses the **value** check only, and `present[i]` is still compared,
+   `data[i]` entry suppresses the **value** check only, and `present[i]` is still compared; a
+   `metadata.<key>`/`userdata.<key>` entry likewise still requires the key on exactly the events
+   where your fixture has it,
    because a wall-clock column varies in value and never in presence — and the presence bitmap is
    where event-copy bugs show. `project` says *only these fields are deterministic*:
    everything else is out of scope entirely, value **and** presence, since an operator whose other
@@ -694,7 +700,10 @@ assert:
   failure is reported as *"failed as expected, but not for the stated reason"*, quoting both.
 - **A substring broad enough to match anything is rejected at load** — `Error`, `exception`,
   `failed`. A case that cannot tell the refusal it is testing from the harness failing to start is
-  worse than no case.
+  worse than no case. The text is rendered with the run's tokens, and the same check applies to
+  the rendered text: a variant that leaves a token `expect_error` uses empty, or renders it to one
+  of those words, is refused at load, and any other token that renders it so fails the case before
+  the drive.
 - **It cannot be combined with `data:`, `acked:`, `monitor:`, `restarts:`, `replayed:`,
   `exception_store:` or `jmx:`.** A failed drive writes no run report and emits nothing, so those
   have nothing to read.

@@ -1143,3 +1143,17 @@ def test_gcs_prune_prefix_needs_gcs_in_requires(tmp_path):
     manifest_path, _ = _write(tmp_path, _REQUIRED_PREFIX + _PERF_BLOCK + "  gcs_prune_prefix: 'x/'\n")
     with pytest.raises(PerfManifestError, match="needs 'gcs'"):
         load_perf_manifest(manifest_path)
+
+
+def test_requires_naming_an_unknown_service_is_refused_at_load(tmp_path):
+    text = _REQUIRED_PREFIX + """
+requires: postgress
+performance:
+  input: performance/in.json
+  run_sizes: [100]
+  correctness:
+    mode: disabled
+"""
+    manifest_path, _ = _write(tmp_path, text)
+    with pytest.raises(PerfManifestError, match="postgress"):
+        load_perf_manifest(manifest_path)

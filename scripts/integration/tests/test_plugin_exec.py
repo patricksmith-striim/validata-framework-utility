@@ -165,6 +165,19 @@ def test_expect_error_fails_when_the_drive_succeeds(pytester, monkeypatch, tmp_p
     assert failure is not None and "it SUCCEEDED" in failure
 
 
+@pytest.mark.parametrize("message", ["", "  ", "Exception"])
+def test_an_expect_error_that_renders_empty_or_too_broad_fails_the_case(pytester, monkeypatch, tmp_path, message):
+    """The breadth guard runs on the RENDERED text: a token that renders empty is a substring of
+    every failure, so the case would pass on "Connection refused"."""
+    case = TARGET_CASE.replace("expect_error: does not fit scale 2", "expect_error: '${MSG}'")
+    _, failure, events = run_case(pytester, monkeypatch, tmp_path, case, {
+        "error": "IntegrationProcessor exited 1",
+        "failure": "java.sql.SQLException: Connection refused\n",
+        "tokens": {"POSTGRES_TARGET_PASSWORD": "unused-pw", "MSG": message}}, TARGET_FILES)
+    assert failure is not None and "assert.expect_error renders to" in failure, failure
+    assert "drive" not in [e["event"] for e in events]
+
+
 @pytest.mark.parametrize("rows,passes", [([[1]], True), ([[2]], False), ([], False)])
 def test_the_target_rows_decide_a_target_case(pytester, monkeypatch, tmp_path, rows, passes):
     _, failure, _ = run_case(pytester, monkeypatch, tmp_path, TARGET_ROWS_CASE, {

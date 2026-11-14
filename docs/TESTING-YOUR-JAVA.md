@@ -122,8 +122,8 @@ that file on each release of the series.
 
 The first one set wins, in that order. Set them in the shell; `.env` does not hold them.
 
-A jar you name and the run cannot use, for any reason below, fails a live case: you asked for that
-jar, so the case cannot pass without it. An integration case skips instead.
+A jar you name and the run cannot use, for any reason below, fails the case, live, integration
+or perf alike: you asked for that jar, so the case cannot pass without it.
 
 - **A folder**, which any of the three may name, must hold exactly one jar for the module named
   `<module>[V<version>]-<series>.jar` (for example `ReferenceOpV1-5.4.jar`) or named for the

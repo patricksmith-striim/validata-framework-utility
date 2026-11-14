@@ -51,7 +51,18 @@ class OpArtifactError(Exception):
 
 
 class OpBuildFailed(OpArtifactError):
-    """The build ran and failed: the module's code or pom is broken, not the environment."""
+    """The build ran and failed, or produced a jar that does not match the release it was asked
+    for: the module's code or pom is broken, or the release does not reach the build."""
+
+
+class OpJarRejected(OpArtifactError):
+    """A prebuilt jar the run was told to use (SLT_PREBUILT_JAR[_<MODULE>] / SLT_PREBUILT_DIR) that
+    cannot be used: missing, ambiguous, unreadable, another module's, or the wrong Java level."""
+
+
+class OpModuleMissing(OpArtifactError):
+    """The module reference names a directory that does not exist: the case is mis-authored (a
+    rename it missed), not this host lacking something."""
 
 
 @dataclass(frozen=True)
@@ -395,9 +406,9 @@ def _prebuilt_jar(module_ref: str, suffix: str, series: str | None = None
         if not matches:
             wanted = (f"series {suffix}" if len(names) == 1
                       else f"release suffix {suffix} or series {series}")
-            raise OpArtifactError(f"{var}: no {mod} jar for {wanted} in {path}")
+            raise OpJarRejected(f"{var}: no {mod} jar for {wanted} in {path}")
         if len(matches) > 1:
-            raise OpArtifactError(f"{var}: multiple candidates for {mod} in {path}: "
+            raise OpJarRejected(f"{var}: multiple candidates for {mod} in {path}: "
                                   f"{[p.name for p in matches]}")
         path = matches[0]
     elif var == "SLT_PREBUILT_JAR" and path.is_file():
@@ -405,17 +416,17 @@ def _prebuilt_jar(module_ref: str, suffix: str, series: str | None = None
         mod = module_name(module_ref)
         own = re.compile(rf"{re.escape(mod)}(?:V\d[^-]*)?", re.IGNORECASE)
         if mod_id and not own.fullmatch(mod_id):
-            raise OpArtifactError(
+            raise OpJarRejected(
                 f"{var}: Striim-Module-Name {mod_id!r} does not match module {mod!r}: {path}")
         # No entry (UDF jars carry none): the file name must name the module, as in a folder. A
         # name ending in neither suffix is left to op_name_for's error.
         end = next((f"-{n}.jar" for n in names if path.name.endswith(f"-{n}.jar")), None)
         if not mod_id and end and not own.fullmatch(path.name[: -len(end)]):
-            raise OpArtifactError(
+            raise OpJarRejected(
                 f"{var}: {path.name} has no Striim-Module-Name and is not named for module "
                 f"{mod!r}: {path}")
     if not path.is_file():
-        raise OpArtifactError(f"{var}: prebuilt jar not found: {path}")
+        raise OpJarRejected(f"{var}: prebuilt jar not found: {path}")
     return path, var
 
 
@@ -452,14 +463,23 @@ def build_jar(module_ref: str, release: dict, run=None, report=None) -> BuiltArt
         prebuilt, var = chosen
         corrupt = _jar_unreadable(prebuilt)
         if corrupt is not None:
-            raise OpArtifactError(f"prebuilt jar is not a readable jar ({corrupt}): {prebuilt}")
-        _assert_jar_java_version(prebuilt, java_release, module_dir)
+            raise OpJarRejected(f"prebuilt jar is not a readable jar ({corrupt}): {prebuilt}")
+        try:
+            _assert_jar_java_version(prebuilt, java_release, module_dir)
+        except OpArtifactError as e:
+            raise OpJarRejected(f"prebuilt jar ({var}) {prebuilt}: {e}") from None
         jar_name = prebuilt.name
         op_name = op_name_for(jar_name, suffix, series)
         digest = file_sha256(prebuilt)
         notify(f"using prebuilt jar ({var}): {prebuilt} (sha256: {digest})")
         return BuiltArtifact(path=prebuilt, name=jar_name, op_name=op_name, sha256=digest, origin="prebuilt")
 
+    if not module_dir.is_dir():
+        # Checked here, not left to `mvn`: with no directory, the build's subprocess raises
+        # FileNotFoundError, which reads exactly like `mvn` missing from this host.
+        raise OpModuleMissing(
+            f"module directory {module_dir} does not exist -- check the case's module reference "
+            f"{module_ref!r}")
     existing = _release_jar_candidates(module_dir, suffix)
     # >1 candidate is stale build output, not a broken repo: a version bump changes the
     # pom's finalName, and `mvn package` writes the new jar BESIDE the old one instead of
@@ -563,6 +583,11 @@ def build_jar(module_ref: str, release: dict, run=None, report=None) -> BuiltArt
             f"{module_dir / 'target'} (found: {[p.name for p in existing]})")
     jar = existing[0]
     # The MANIFEST stamp is written by the pom during the build, not here; verify what landed.
-    _assert_jar_java_version(jar, java_release, module_dir)
+    # This run built it, so a wrong Java level here is a build that did not produce the release
+    # it was asked for (OpBuildFailed), not a stale jar to clean (the reuse path's OpArtifactError).
+    try:
+        _assert_jar_java_version(jar, java_release, module_dir)
+    except OpArtifactError as e:
+        raise OpBuildFailed(str(e)) from None
     _write_source_record(jar, module_dir)
     return BuiltArtifact(path=jar, name=jar.name, op_name=op_name_for(jar.name, suffix), origin="built")

@@ -1278,3 +1278,35 @@ assert:
 """)
     with pytest.raises(ManifestError, match="SHAPE metric"):
         load_manifest(path)
+
+
+# --- expect_error rendered per variant: a token that renders empty matches every failure --------
+
+REFUSE = BASE.replace("requires: [postgres]", "requires: [postgres, oracle]") + """
+target:
+  input: input/events.json
+variants:
+  postgres: {{db: postgres-target, tokens: {{V_MSG: 'null value in column'}}}}
+  oracle: {{db: oracle-target, tokens: {{V_MSG: {oracle}}}}}
+assert:
+  expect_error: '${{V_MSG}}'
+"""
+
+
+@pytest.mark.parametrize("value", ["", "'  '"])
+def test_a_variant_leaving_an_expect_error_token_empty_is_refused(tmp_path, value):
+    path, _ = _write(tmp_path, REFUSE.format(oracle=value))
+    with pytest.raises(ManifestError, match=r"variants\.oracle.*V_MSG.*expect_error"):
+        load_manifest(path)
+
+
+def test_a_variant_rendering_expect_error_too_broad_is_refused(tmp_path):
+    path, _ = _write(tmp_path, REFUSE.format(oracle="Exception"))
+    with pytest.raises(ManifestError, match=r"variants\.oracle.*too broad"):
+        load_manifest(path)
+
+
+def test_every_variant_rendering_a_specific_expect_error_loads(tmp_path):
+    path, _ = _write(tmp_path, REFUSE.format(oracle="'ORA-01400'"))
+    assert [v.tokens["V_MSG"] for v in load_manifest(path).variants] == [
+        "null value in column", "ORA-01400"]

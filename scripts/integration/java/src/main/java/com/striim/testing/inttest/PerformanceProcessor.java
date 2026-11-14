@@ -120,6 +120,15 @@ public final class PerformanceProcessor {
         public Integer errorReplayIndex;
         /** The record index (within one replay) at which {@link #errorMessage} occurred. */
         public Integer errorRecordIndex;
+        /**
+         * A target only: events the writer acknowledged during the measured window, after its
+         * closing flush; {@code null} for any other driver and for a writer without the
+         * {@code Acknowledgeable} marker. A writer emits nothing, so this and
+         * {@link #publishedProcessed} are the evidence that the window wrote anything.
+         */
+        public Long measuredAckedEvents;
+        /** A target only: the {@code PROCESSED} value it publishes after the closing flush, or {@code null}. */
+        public String publishedProcessed;
     }
 
     public static void main(String[] args) {
@@ -318,6 +327,9 @@ public final class PerformanceProcessor {
         // an already-established assumption of this framework, not a new one here.
         List<WAEvent> retainedReplay0 = new ArrayList<>();
 
+        // Read before the clock starts: the warmup's own acks are not the window's.
+        long ackedBefore = core.writes() ? core.acknowledgedEvents() : -1;
+
         long startNanos = System.nanoTime();
         long startEpoch = System.currentTimeMillis();
 
@@ -382,6 +394,24 @@ public final class PerformanceProcessor {
         result.measuredEndEpochMillis = endEpoch;
         result.measuredDurationNanos = endNanos - startNanos;
         result.comparedReplayOutputEvents = comparedReplayOutputEvents;
+
+        // A writer's evidence that the window wrote something, read after the closing flush and
+        // outside the timed region. A monitor read that throws fails the iteration, as a failed
+        // flush does; the runner decides what a zero means.
+        if (failure == null && core.writes()) {
+            long ackedAfter = core.acknowledgedEvents();
+            if (ackedBefore >= 0 && ackedAfter >= 0) {
+                result.measuredAckedEvents = ackedAfter - ackedBefore;
+            }
+            try {
+                result.publishedProcessed = core.publishedProcessed();
+            } catch (Exception e) {
+                result.errorMessage = describeError(e);
+                result.errorReplayIndex = request.runSize - 1;
+                result.errorRecordIndex = null;
+                failure = e;
+            }
+        }
 
         // Safe to build the ObjectNode tree now, outside the timed window (§5).
         for (WAEvent out : retainedReplay0) {

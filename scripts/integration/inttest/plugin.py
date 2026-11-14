@@ -580,9 +580,12 @@ def _int_all_skipped_guard(session, exitstatus):
     """An integration or perf run that executed no case because this host could not run them
     must not exit 0: ``7 skipped`` reads as green to every caller (live's ``_slt_infra_guard``).
 
-    Fires when at least one case skipped for an environment or build reason (``EnvSkip``) and no
-    case executed. A partial run keeps its status; a declared skip (``disabled:``, an opt-in gate)
-    never fires it. ``INT_ALLOW_ALL_SKIPPED=1`` opts out, but not when a build was the cause."""
+    Fires when at least one case skipped for an environment or build reason (``EnvSkip``) and
+    either no case executed, or one of the skips has the cause ``build``. A partial run with only
+    absent infrastructure keeps its status; a module that could not be built is different: the
+    cases that load it were never tested, and the cases that did run cannot vouch for them, so it
+    fails the run whatever else ran. A declared skip (``disabled:``, an opt-in gate) never fires
+    it. ``INT_ALLOW_ALL_SKIPPED=1`` opts out, but never for a build skip."""
     tr = session.config.pluginmanager.get_plugin("terminalreporter")
     if tr is None:
         return exitstatus
@@ -592,8 +595,19 @@ def _int_all_skipped_guard(session, exitstatus):
         return [r for r in stats.get(key, []) if getattr(r, "_int_case", False)]
 
     blocked = [r for r in cases("skipped") if getattr(r, "_int_env_skip", "")]
-    if not blocked or cases("passed") or cases("failed") or cases("error"):
+    if not blocked:
         return exitstatus
+    if cases("passed") or cases("failed") or cases("error"):
+        unbuilt = [r for r in blocked if r._int_env_skip == "build"]
+        if not unbuilt:
+            return exitstatus
+        print("")
+        print(f"[integration] {len(unbuilt)} case(s) were skipped because a module they load could "
+              f"not be built; they were never tested, so the run FAILS.")
+        for r in unbuilt:
+            why = r.longrepr[2] if isinstance(r.longrepr, tuple) else str(r.longrepr)
+            print(f"[integration]   {r.nodeid}: {why}")
+        return 1 if exitstatus == 0 else exitstatus
     causes = {r._int_env_skip for r in blocked}
     if os.environ.get("INT_ALLOW_ALL_SKIPPED") and "build" not in causes:
         return exitstatus
@@ -1586,9 +1600,14 @@ def _build_operator_jar(name: str, op_jar_ref: str, report=None):
     `report`, when given, is passed straight through to `opartifacts.build_jar` --
     `PerfYamlItem` uses it to record whether this run rebuilt the jar (PERF_SPEC.md
     §12's "whether the jar was rebuilt during this run or reused"); `IntYamlItem`
-    leaves it `None`, unchanged from before."""
+    leaves it `None`, unchanged from before.
+
+    A missing build prerequisite (STRIIM_HOME, `mvn`, the release's JDK) skips with the cause
+    "build", which fails the run whatever else ran (`_int_all_skipped_guard`). A module path
+    that is not there, a prebuilt jar that cannot be used, or a build that ran and failed or
+    produced the wrong release fails the case."""
     if not os.environ.get("STRIIM_HOME"):
-        _env_skip("env", 
+        _env_skip("build", 
             f"{name}: STRIIM_HOME is not set -- building {op_jar_ref!r} needs a "
             f"Striim install (running the fast unit suite does not)"
         )
@@ -1609,7 +1628,14 @@ def _build_operator_jar(name: str, op_jar_ref: str, report=None):
         # A FAILURE, not a skip: the build ran, so the module itself is broken, and a skip
         # would let a run that tested nothing of it read green.
         pytest.fail(f"{name}: operator jar {op_jar_ref!r} failed to build: {e}")
+    except opartifacts_mod.OpJarRejected as e:
+        # The run was told to use this jar, so the case cannot pass without it.
+        pytest.fail(f"{name}: cannot use the prebuilt jar for {op_jar_ref!r}: {e}", pytrace=False)
+    except opartifacts_mod.OpModuleMissing as e:
+        pytest.fail(f"{name}: {e}", pytrace=False)
     except (opartifacts_mod.OpArtifactError, FileNotFoundError) as e:
+        # A missing build prerequisite (no `mvn`, no JDK for the release), or a reused jar
+        # stamped for another release that needs `mvn clean`.
         _env_skip("build", f"{name}: cannot build operator jar {op_jar_ref!r}: {e}")
 
 
@@ -2117,6 +2143,14 @@ class IntYamlItem(pytest.Item):
 
         at = _run_label(variant, overrides)
         tok = self._variant_tokens(variant)
+        # The load-time breadth guard saw the raw text; a token can render it empty (a substring
+        # of every failure) or down to a bare "Exception". Checked before the drive, on what will
+        # actually be matched.
+        expected = tokens_mod.render(m.assert_.expect_error, tok)
+        broad = manifest_mod.expect_error_breadth(expected)
+        if broad:
+            pytest.fail(f"{m.name}{at}: assert.expect_error renders to {expected!r} here: {broad}",
+                        pytrace=False)
         props = {k: tokens_mod.render(v, tok) for k, v in m.properties.items()}
         props.update(overrides or {})
         if "ConfigFile" in props:
@@ -2150,7 +2184,6 @@ class IntYamlItem(pytest.Item):
             # "Cannot insert the value NULL into column", Oracle raises ORA-01400, and there is no
             # common sqlState either (23502 / 23000 / 23000). Rendering costs nothing for a case
             # with no tokens in its expect_error, which is all of them today.
-            expected = tokens_mod.render(m.assert_.expect_error, self._variant_tokens(variant))
             if refusal is not None and expected in refusal:
                 # Refused, for the stated reason. Now check what the failure LEFT BEHIND: a
                 # rollback is only proved by the database, not by the exception.
@@ -2164,7 +2197,7 @@ class IntYamlItem(pytest.Item):
                 f"--- harness error ---\n{e}")
         pytest.fail(
             f"{m.name}{at}: expected the drive to be REFUSED with a failure containing "
-            f"{tokens_mod.render(m.assert_.expect_error, self._variant_tokens(variant))!r}, "
+            f"{expected!r}, "
             f"but it SUCCEEDED. A refusal that stopped happening is a "
             f"behaviour change, and silently writing what this case says must be rejected is the "
             f"outcome it exists to prevent.")

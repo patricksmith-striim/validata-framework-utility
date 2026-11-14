@@ -1192,3 +1192,84 @@ def test_delete_prefix_refuses_an_empty_prefix(prefix):
     from inttest import gcsadmin
     with pytest.raises(ValueError, match="empty prefix"):
         gcsadmin.delete_prefix({"GCS_BUCKET": "b"}, prefix)
+
+
+# --- a target iteration needs evidence that something was written ----------------------------------
+# A writer emits nothing, so a target case runs with correctness disabled and the checks above prove
+# only "accepted and flushed without throwing". A writer whose Tables mapping matched nothing, or
+# that dropped every event, reported a throughput and `success`.
+
+def _target_result(**overrides):
+    return _base_perf_result(measuredOutputEvents=0, comparedReplayOutputEvents=0, comparedRecords=[],
+                             **overrides)
+
+
+def _check_target(result):
+    return perf.check_correctness(result, events_in_file=2, run_size=10, correctness_mode="disabled",
+                                  sample_indices=None, expected_events=None, target=True)
+
+
+def test_a_target_iteration_that_acked_its_events_passes():
+    assert _check_target(_target_result(measuredAckedEvents=20, publishedProcessed="40")).passed
+
+
+def test_a_target_iteration_that_acked_nothing_fails():
+    outcome = _check_target(_target_result(measuredAckedEvents=0, publishedProcessed=None))
+    assert not outcome.passed and "acknowledged none of the 20" in outcome.reason
+
+
+def test_a_target_iteration_whose_writer_published_processed_zero_fails():
+    outcome = _check_target(_target_result(measuredAckedEvents=20, publishedProcessed="0"))
+    assert not outcome.passed and "PROCESSED" in outcome.reason
+
+
+def test_a_target_iteration_with_neither_acks_nor_processed_fails():
+    outcome = _check_target(_target_result(measuredAckedEvents=None, publishedProcessed=None))
+    assert not outcome.passed and "no evidence" in outcome.reason
+
+
+def test_a_target_result_without_the_evidence_fields_fails():
+    outcome = _check_target(_target_result())
+    assert not outcome.passed and "measuredAckedEvents" in outcome.reason
+
+
+def test_a_non_target_iteration_needs_no_writer_evidence():
+    outcome = perf.check_correctness(_base_perf_result(), events_in_file=2, run_size=10,
+                                     correctness_mode="disabled", sample_indices=None,
+                                     expected_events=None)
+    assert outcome.passed
+
+
+def test_run_measured_iteration_holds_a_target_case_to_the_evidence_check(tmp_path):
+    from inttest.manifest import TargetSpec
+    regression_dir = tmp_path / "regression-case"
+    regression_dir.mkdir()
+    perf_dir = tmp_path / "perf-case"
+    perf_dir.mkdir()
+    input_path = perf_dir / "in.json"
+    input_path.write_text(_ONE_RECORD)
+    test_manifest = TestManifest(
+        name="fake-writer", op=OpRef(jar="java/OpenProcessors/FakeWriter"), properties={},
+        assert_=AssertSpec(data=[], smoke=True), dir=regression_dir,
+        requires=[], ddl=[], seed=[], types={}, password_properties=[],
+        target=TargetSpec(input="in.json", input_path=input_path),
+    )
+    performance = PerformanceSpec(
+        input="in.json", input_path=input_path,
+        run_sizes=[RunSize(authored="10", value=10)],
+        correctness=PerfCorrectnessSpec(mode="disabled"),
+        metrics=PerfMetricsSpec(capture_cpu=False, capture_memory=False),
+    )
+    preflight_result = perf.preflight(performance)
+    nothing_written = dict(_CANNED_RESULT, measuredOutputEvents=0, comparedReplayOutputEvents=0,
+                           measuredAckedEvents=0, publishedProcessed="0")
+    fake_java = _write_fake_java(tmp_path, sleep_seconds=0.05, result=nothing_written)
+
+    result = perf.run_measured_iteration(
+        manifest=test_manifest, performance=performance, preflight_result=preflight_result,
+        run_size=performance.run_sizes[0], tokens={},
+        java_bin=str(fake_java), harness_jar=tmp_path / "harness.jar", op_jar=tmp_path / "op.jar",
+        scratch_dir=tmp_path,
+    )
+    assert result.status == "failed"
+    assert "acknowledged none" in result.failure_reason
