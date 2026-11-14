@@ -62,9 +62,12 @@ It refuses (exit 2), changing nothing, when:
 
 1. Runs the hermetic suites with the current interpreter (`--python` names another), and stops at
    the first failure before any file changes (exit 1):
-   - `tests/` at the root;
+   - `tests/` at the root: `pytest -m "not live and not docker" tests`;
    - `scripts/live`: `pytest -m "not live" tests`;
-   - `scripts/integration`: `pytest -m "not docker" tests`.
+   - `scripts/integration`: `pytest -m "not integration and not docker" tests`.
+
+   These are the commands in [CONTRIBUTING.md](../../CONTRIBUTING.md) and the pull-request
+   workflow, `.github/workflows/hermetic-tests.yml`; `tests/test_ci_workflow.py` keeps the three equal.
 
    `--skip-tests` skips them and prints a warning. Use it only when the same commit has just passed
    them.

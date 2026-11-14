@@ -73,6 +73,11 @@ Run the suites for whatever you touch. These framework tests use pytest directly
 (cd scripts/integration && ../../.venv-test/bin/python -m pytest -q -m 'not integration and not docker' tests)
 ```
 
+The same three commands run on every pull request (`.github/workflows/hermetic-tests.yml`, Linux,
+Python 3.12, no Docker, `STRIIM_HOME` unset). Each suite also has a skip budget there: a pull request
+that adds a skip raises that suite's `max-skips` and says why. `tests/test_ci_workflow.py` keeps the
+workflow, these commands and `tools/release.py` the same.
+
 On a Linux test host with user systemd, prefix each Python command with
 `systemd-run --user --scope -q -p MemoryMax=4G -p MemorySwapMax=0` to cap its memory.
 

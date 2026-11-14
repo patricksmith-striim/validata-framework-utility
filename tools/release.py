@@ -33,11 +33,13 @@ ROOT = Path(__file__).resolve().parents[1]
 PYPROJECTS = ("pyproject.toml", "scripts/live/pyproject.toml", "scripts/integration/pyproject.toml")
 NOTES = "RELEASE-NOTES.md"
 NOTES_HEADER = "# Release notes\n\nOne entry per release, newest first: the pull requests it contains.\n"
-# The hermetic suites: (directory, arguments after the interpreter). No Docker, no Striim.
+# The hermetic suites: (directory, arguments after the interpreter). No Docker, no Striim. The same
+# three as CONTRIBUTING.md and .github/workflows/hermetic-tests.yml (tests/test_ci_workflow.py).
 SUITES = [
-    (".", ["-m", "pytest", "-q", "-p", "no:cacheprovider", "tests"]),
+    (".", ["-m", "pytest", "-q", "-p", "no:cacheprovider", "-m", "not live and not docker", "tests"]),
     ("scripts/live", ["-m", "pytest", "-q", "-p", "no:cacheprovider", "-m", "not live", "tests"]),
-    ("scripts/integration", ["-m", "pytest", "-q", "-p", "no:cacheprovider", "-m", "not docker", "tests"]),
+    ("scripts/integration", ["-m", "pytest", "-q", "-p", "no:cacheprovider", "-m", "not integration and not docker",
+                             "tests"]),
 ]
 SEMVER = re.compile(r"(\d+)\.(\d+)\.(\d+)")
 _SQUASH = re.compile(r"^(?P<title>.+) \(#(?P<n>\d+)\)$")

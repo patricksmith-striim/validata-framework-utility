@@ -7,7 +7,8 @@ expected rows exactly, and cleans up. It runs against your own Striim server, or
 cluster it builds and starts in Docker.
 
 It is for teams who build Striim apps, Open Processors or UDFs and want checks they can repeat on
-every change and run in CI.
+every change and run in their own CI ([docs/SET-UP-YOUR-OWN-REPO.md](docs/SET-UP-YOUR-OWN-REPO.md#run-it-in-ci)).
+The framework's own hermetic tests, which need no Striim or Docker, run on every pull request to it.
 
 ## Run your first test
 
