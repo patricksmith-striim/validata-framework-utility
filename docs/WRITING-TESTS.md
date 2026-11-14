@@ -284,8 +284,10 @@ For an initial load, use `mode: initial-load` with `baseline-landed` and `source
 
 ## 6. Check it, list it, run it
 
-**Check the test without running it.** `doctor` loads each case you name the way a run does,
-and prints one `case` line for it. A mistake shows there with the key at fault:
+**Check the test without running it.** `doctor` loads each case you name the way a run does
+before it deploys anything, assertion specs included, and prints one `case` line for it. A
+mistake shows there with the key at fault: a misspelt key anywhere in the file, or a spec
+missing a key it needs. A golden file's contents are read only when its tier runs.
 
 ```
 striim-test doctor --case samples/mine/orders-cdc

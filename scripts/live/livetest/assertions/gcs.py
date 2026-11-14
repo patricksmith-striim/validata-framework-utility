@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import time
 
-from livetest.assertions import AssertionFailed
+from livetest.assertions import AssertionFailed, refuse_unknown_keys
 from livetest.resultschema import build_assertion_result
 
 # Assert a GCS object's CONTENT (for a binary writer): the
@@ -15,10 +15,16 @@ class GcsSpecError(Exception):
     pass
 
 
+#: Every key an `assert.gcs` spec may carry (what _evaluate reads).
+GCS_SPEC_KEYS = frozenset({"bucket", "object", "content_hex", "sha256", "size"})
+
+
 def parse_gcs_specs(raw: list) -> list[dict]:
     if not isinstance(raw, list):
         raise GcsSpecError("'assert.gcs' must be a list of specs")
     for spec in raw:
+        if isinstance(spec, dict):
+            refuse_unknown_keys(spec, GCS_SPEC_KEYS, f"gcs spec {spec.get('object')!r}", GcsSpecError)
         if not isinstance(spec, dict) or not spec.get("bucket") or not spec.get("object"):
             raise GcsSpecError(f"gcs spec needs 'bucket' and 'object': {spec!r}")
         if not any(k in spec for k in ("content_hex", "sha256", "size")):

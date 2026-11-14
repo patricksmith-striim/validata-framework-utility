@@ -5,7 +5,7 @@ import time
 from collections import Counter
 from pathlib import Path
 
-from livetest.assertions import AssertionFailed
+from livetest.assertions import AssertionFailed, refuse_unknown_keys
 from livetest.assertions.data import apply_null, distinct_set, normalized_row, read_golden_csv, sorted_rows_for_display, strip_absent   # reuse the exact distinct-set compare
 from livetest.assertions.expected import load_expected_text
 from livetest.resultschema import build_assertion_result
@@ -16,6 +16,15 @@ class FileSpecError(Exception):
 
 
 _PROJECTIONS = ("data", "userdata", "before", "all")
+
+
+#: Every key an `assert.file` spec may carry: what assert_file reads, plus the typed `exact:`
+#: and `audit:` keys. `raw:` and `nothing:` specs take fewer keys, and their own validators
+#: (livetest.rawfile, livetest.nothing) say which.
+FILE_SPEC_KEYS = frozenset({
+    "path", "match", "min_events", "events", "distinct_events", "project", "metadata", "keys",
+    "multiset", "order", "stable_seconds", "exact", "audit", "raw", "nothing",
+})
 
 
 def parse_file_specs(raw: list) -> list[dict]:
@@ -30,6 +39,7 @@ def parse_file_specs(raw: list) -> list[dict]:
             continue
         if "nothing" in spec:
             continue
+        refuse_unknown_keys(spec, FILE_SPEC_KEYS, f"file spec {spec['path']!r}", FileSpecError)
         if not any(k in spec for k in ("match", "min_events", "events", "distinct_events")):
             raise FileSpecError(
                 f"file spec {spec['path']!r} needs one of match/min_events/events/distinct_events")

@@ -1,6 +1,16 @@
 from __future__ import annotations
 
 
+def refuse_unknown_keys(spec: dict, allowed, what: str, error: type) -> None:
+    """Raise ``error`` naming every key of ``spec`` outside ``allowed``.
+
+    Each spec parser calls this with the keys its assertion code reads, so a misspelt key (a
+    `multset:` that silently left the compare a distinct set) is refused, not ignored."""
+    unknown = sorted(str(k) for k in spec if k not in allowed)
+    if unknown:
+        raise error(f"{what} has unknown key(s) {unknown} -- allowed: {sorted(allowed)}")
+
+
 class NotYetReadable(Exception):
     """A committed read refused at once because a writer still holds the table (Teradata's
     NOWAIT read), or chosen as a deadlock victim against the writer (SQL Server 1205). The diff

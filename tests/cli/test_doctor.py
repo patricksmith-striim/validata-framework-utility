@@ -508,6 +508,19 @@ def test_case_manifest_error_is_config_and_names_the_key(tmp_path):
     assert "unknown manifest key(s) ['timout']" in c.message
 
 
+def test_case_manifest_with_a_broken_assert_spec_fails(tmp_path):
+    # An incomplete or misspelt data/diff/file/gcs/json spec used to pass this check and fail
+    # only after the run had provisioned and deployed.
+    for name, spec, why in (("incomplete", "{target: t}", "needs one of min_rows/rows/match"),
+                            ("typo", "{target: t, min_rows: 1, macth: g.csv}", "unknown key(s) ['macth']")):
+        d = tmp_path / name
+        d.mkdir()
+        (d / "test.yaml").write_text(f"name: {name}\ntql: app.tql\nassert:\n  data:\n    - {spec}\n")
+        c = one_fail(doctor.check_manifests([d / "test.yaml"]))
+        assert c.subject == f"case {name}" and c.code == CONFIG
+        assert "assert.data[0]" in c.message and why in c.message
+
+
 def test_case_manifests_load_with_their_own_tiers_loader(project):
     # review D1: an integration or perf case has no `tql:`, so the live loader failed it
     from striim_test import project_io

@@ -3,7 +3,7 @@ from __future__ import annotations
 import time
 from collections import Counter
 
-from livetest.assertions import AssertionFailed, NotYetReadable
+from livetest.assertions import AssertionFailed, NotYetReadable, refuse_unknown_keys
 from livetest.assertions.data import distinct_set, normalized_row
 from livetest import canon as _slt_canon   # legacy-text/1 (C8.4)
 from livetest.resultschema import build_assertion_result
@@ -13,10 +13,19 @@ class DiffSpecError(Exception):
     pass
 
 
+#: Every key an `assert.diff` spec may carry: what assert_diff and its endpoint routing read,
+#: plus `keys`, which the typed `exact:` declaration (canon) reads.
+DIFF_SPEC_KEYS = frozenset({
+    "source", "target", "db", "source_db", "target_db", "exact", "fold_names", "keys",
+})
+
+
 def parse_diff_specs(raw: list) -> list[dict]:
     if not isinstance(raw, list):
         raise DiffSpecError("'assert.diff' must be a list of specs")
     for spec in raw:
+        if isinstance(spec, dict):
+            refuse_unknown_keys(spec, DIFF_SPEC_KEYS, f"diff spec {spec.get('target')!r}", DiffSpecError)
         if not isinstance(spec, dict) or not spec.get("source") or not spec.get("target"):
             raise DiffSpecError(f"diff spec needs both 'source' and 'target': {spec!r}")
         if "exact" in spec and not isinstance(spec["exact"], bool):

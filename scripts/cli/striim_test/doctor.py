@@ -961,7 +961,8 @@ def _loaders():
 
 def check_manifests(files: list, tier_of=None) -> list:
     """One check per case: its test.yaml loads as a run of its tier loads it (the live loader with the
-    ``exact:`` and ``lifecycle:`` rules; the integration and perf loaders for those tiers), so a typo
+    ``exact:`` and ``lifecycle:`` rules and every assertion spec parsed; the integration and perf
+    loaders for those tiers), so a typo
     fails here and not at run time. Without ``tier_of`` every case is live. A case outside every
     case root is not checked: ``run`` refuses it anyway, naming the roots."""
     loaders = _loaders()

@@ -5,7 +5,7 @@ import io
 import time
 from pathlib import Path
 
-from livetest.assertions import AssertionFailed, NotYetReadable, PartialRead
+from livetest.assertions import AssertionFailed, NotYetReadable, PartialRead, refuse_unknown_keys
 from livetest.assertions.expected import load_expected_text
 from livetest.resultschema import build_assertion_result
 
@@ -131,10 +131,21 @@ def sorted_rows_for_display(rows) -> list:
     return sorted(per_row_sorted, key=repr)
 
 
+#: Every key an `assert.data` spec may carry: what assert_data, the plugin's routing
+#: (`_spec_route`: source_db, target_db, db), the typed `exact:` path (canon, exactdata), the
+#: `nothing:` and `audit:` checks read. `nothing` specs are validated by livetest.nothing.
+DATA_SPEC_KEYS = frozenset({
+    "target", "db", "target_db", "source_db", "min_rows", "rows", "match",
+    "project", "keys", "ordered", "payload", "exact", "nothing", "audit",
+})
+
+
 def parse_data_specs(raw: list) -> list[dict]:
     if not isinstance(raw, list):
         raise DataSpecError("'assert.data' must be a list of specs")
     for spec in raw:
+        if isinstance(spec, dict):
+            refuse_unknown_keys(spec, DATA_SPEC_KEYS, f"data spec {spec.get('target')!r}", DataSpecError)
         if not isinstance(spec, dict) or not spec.get("target"):
             raise DataSpecError(f"data spec needs a 'target': {spec!r}")
         if "project" in spec:

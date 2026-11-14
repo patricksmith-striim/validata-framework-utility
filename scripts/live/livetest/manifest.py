@@ -1,4 +1,5 @@
 from __future__ import annotations
+import copy
 import re
 import warnings
 from dataclasses import dataclass, field
@@ -79,6 +80,13 @@ _DROP_RECREATE_KEYS = {"type", "app", "delay_before_stop", "recreate_wait", "see
                        "capture", "stopped_seed", "tokens"}
 _ALTER_RECOMPILE_KEYS = {"type", "app", "file", "delay_before_stop", "interrupt", "capture",
                          "stopped_seed", "server_files", "seed"}
+# The keys each block entry's parser reads; anything else is refused at load, naming the key.
+# `source_db`/`target_db` are the deprecated ddl/seed route keys, still read (with a warning).
+_FILE_ENTRY_KEYS = {"file", "db", "source_db", "target_db", "local"}
+_SERVER_FILE_KEYS = {"file", "dest", "when", "load"}
+_GENERATE_KEYS = {"kind", "workload", "dest", "when"}
+_CONCURRENT_KEYS = {"db", "file", "loop_interval"}
+_STOP_START_CYCLE_KEYS = {"type", "cycles", "delay_before_stop", "stop_duration", "concurrent"}
 # How alter_recompile takes the app down before the swap: STOP (no flush) or QUIESCE (the drain).
 _ALTER_RECOMPILE_INTERRUPTS = ("stop", "quiesce")
 # Statements alter_recompile writes itself around the fragment. A fragment carrying one would
@@ -244,6 +252,12 @@ def _normalize_file_specs(raw, field_name: str, path=None, allow_when: bool = Fa
                 raise ManifestError(
                     f"'{field_name}' list items need a 'file' (plus an optional 'db' "
                     f"route): {item!r}")
+            unknown = sorted(str(k) for k in item if k not in _FILE_ENTRY_KEYS | {"when", "after"})
+            if unknown:
+                allowed = _FILE_ENTRY_KEYS | ({"when", "after"} if allow_when else set())
+                raise ManifestError(
+                    f"{path}: '{field_name}' entry has unknown key(s) {unknown} -- allowed: "
+                    f"{sorted(allowed)}: {item!r}")
             if refs_out is not None:
                 refs_out.append((item["file"], _parse_local(item, field_name, path)))
             # A ddl/seed file routes to ONE admin; default to the source route.
@@ -358,6 +372,11 @@ def _normalize_server_files(raw, path=None) -> list:
         raise ManifestError("'server_files' must be a list of {file, dest, when, load} entries")
     out = []
     for item in raw:
+        if isinstance(item, dict) and set(item) - _SERVER_FILE_KEYS:
+            raise ManifestError(
+                f"{path}: 'server_files' item has unknown key(s) "
+                f"{sorted(str(k) for k in item if k not in _SERVER_FILE_KEYS)} -- allowed: "
+                f"{sorted(_SERVER_FILE_KEYS)}: {item!r}")
         if not isinstance(item, dict) or not item.get("file") or not item.get("dest"):
             raise ManifestError(f"'server_files' item needs 'file' and 'dest': {item!r}")
         when = item.get("when", "pre_deploy")
@@ -436,6 +455,11 @@ def _normalize_generate(raw, source_dir, path) -> list:
     for item in raw:
         if not isinstance(item, dict):
             raise ManifestError(f"{path}: 'generate' entries must be mappings: {item!r}")
+        if set(item) - _GENERATE_KEYS:
+            raise ManifestError(
+                f"{path}: 'generate' entry has unknown key(s) "
+                f"{sorted(str(k) for k in item if k not in _GENERATE_KEYS)} -- allowed: "
+                f"{sorted(_GENERATE_KEYS)}: {item!r}")
         kind = item.get("kind")
         if not isinstance(kind, str) or not kind.strip():
             raise ManifestError(
@@ -575,6 +599,11 @@ def _parse_concurrent(action: dict, i: int, path, requires) -> list:
             if not isinstance(op, dict):
                 raise ManifestError(
                     f"{path}: action[{i}] concurrent[{j}] must be a dict, got {op!r}")
+            if set(op) - _CONCURRENT_KEYS:
+                raise ManifestError(
+                    f"{path}: action[{i}] concurrent[{j}] has unknown key(s) "
+                    f"{sorted(str(k) for k in op if k not in _CONCURRENT_KEYS)} -- allowed: "
+                    f"{sorted(_CONCURRENT_KEYS)}")
             op_db = op.get("db")
             if not op_db:
                 raise ManifestError(
@@ -1096,6 +1125,51 @@ def _fixture_timeout(raw, path):
     return value
 
 
+def _check_assert_specs(assert_, path) -> None:
+    """Parse every data/diff/file/gcs/json spec at load, as the run would after deploy, so an
+    incomplete spec or a key no assertion reads is refused before anything is provisioned.
+
+    Each spec is parsed on its own copy: the parsers normalize in place (a json `key` string
+    becomes a list) and the run parses again. `nothing:` and `raw:` specs are validated by
+    livetest.nothing and livetest.rawfile. A typed spec (`exact:` on data or file, a mapping
+    `exact:` on diff) has only its keys checked here: canon validates the rest, as the run does.
+    """
+    from livetest.assertions import refuse_unknown_keys
+    from livetest.assertions.data import DATA_SPEC_KEYS, DataSpecError, parse_data_specs
+    from livetest.assertions.diff import DIFF_SPEC_KEYS, DiffSpecError, parse_diff_specs
+    from livetest.assertions.file import FILE_SPEC_KEYS, FileSpecError, parse_file_specs
+    from livetest.assertions.gcs import GCS_SPEC_KEYS, GcsSpecError, parse_gcs_specs
+    from livetest.assertions.json import JSON_SPEC_KEYS, JsonSpecError, parse_json_specs
+    if not isinstance(assert_, dict):
+        return
+    for tier, parse, error, keys in (("data", parse_data_specs, DataSpecError, DATA_SPEC_KEYS),
+                                     ("diff", parse_diff_specs, DiffSpecError, DIFF_SPEC_KEYS),
+                                     ("file", parse_file_specs, FileSpecError, FILE_SPEC_KEYS),
+                                     ("gcs", parse_gcs_specs, GcsSpecError, GCS_SPEC_KEYS),
+                                     ("json", parse_json_specs, JsonSpecError, JSON_SPEC_KEYS)):
+        specs = assert_.get(tier)
+        if specs is None:
+            continue
+        if not isinstance(specs, list):
+            if tier in ("data", "diff", "file"):
+                continue            # canon refuses the shape (invalid-assert-shape)
+            try:
+                parse(specs)
+            except error as e:
+                raise ManifestError(f"{path}: {e}") from None
+        for i, spec in enumerate(specs):
+            try:
+                if isinstance(spec, dict) and ("nothing" in spec or (tier == "file" and "raw" in spec)):
+                    continue
+                if isinstance(spec, dict) and "exact" in spec and (
+                        tier in ("data", "file") or isinstance(spec["exact"], dict)):
+                    refuse_unknown_keys(spec, keys, f"{tier} spec", error)
+                    continue
+                parse([copy.deepcopy(spec)])
+            except error as e:
+                raise ManifestError(f"{path}: assert.{tier}[{i}]: {e}") from None
+
+
 def load_manifest(path: Path) -> TestManifest:
     path = Path(path)
     try:
@@ -1209,6 +1283,7 @@ def load_manifest(path: Path) -> TestManifest:
         raise ManifestError(
             f"{path}: 'assert' has unknown tier(s) {sorted(set(assert_) - VALID_ASSERT_TIERS)} -- "
             f"allowed: {sorted(VALID_ASSERT_TIERS)}")
+    _check_assert_specs(assert_, path)
     # T4-MON. Validated at load so a clock is refused before any stack boots for it.
     if assert_ and assert_.get("monitor") is not None:
         from livetest.assertions.monitor import MonitorSpecError, parse_monitor_specs
@@ -1415,6 +1490,11 @@ def load_manifest(path: Path) -> TestManifest:
             if not action_type:
                 raise ManifestError(f"{path}: action[{i}] must have a 'type' key")
             if action_type == "stop_start_cycle":
+                unknown = sorted(str(k) for k in action if k not in _STOP_START_CYCLE_KEYS)
+                if unknown:
+                    raise ManifestError(
+                        f"{path}: action[{i}] 'stop_start_cycle' has unknown key(s) {unknown} -- "
+                        f"allowed: {sorted(_STOP_START_CYCLE_KEYS - {'type'})}")
                 cycles = action.get("cycles", 1)
                 if not isinstance(cycles, int) or cycles < 1:
                     raise ManifestError(

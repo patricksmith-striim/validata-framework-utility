@@ -1799,8 +1799,13 @@ This catches typos (`timout: 30` never applied its timeout) and keys dropped in 
 both of which used to load silently and take the default — which is how a CDC test ends up
 seeding before its reader starts and failing for a reason the manifest does not show.
 
-The same rule applies inside `op:`/`udf:` entries and to `assert:` tier names, in live and
-integration cases alike.
+The same rule applies to `assert:` tier names in live and integration cases alike. In a live
+case it also applies inside `op:`/`udf:` entries, `ddl:`, `seed:`, `server_files:` and
+`generate:` entries, `action:` entries (including `stop_start_cycle` and its `concurrent:`
+loops), and every `data`, `diff`, `file`, `gcs` and `json` assertion spec. Those specs are also
+checked for their required keys at load (a `data` spec with no `min_rows`/`rows`/`match`, say),
+so `striim-test doctor --case` reports a misspelt `multset:` or `macth:` instead of the run
+quietly falling back to the weaker compare after deploy.
 
 ## `op:` / `udf:` — building/uploading OpenProcessor or UDF jars
 
@@ -1933,7 +1938,8 @@ assert:
       # or: rows: N                # poll until count(*) == N exactly
       # or: match: expected/rows.csv  # distinct row SET == golden CSV (order-/dup-insensitive)
 ```
-Each spec needs `target` plus at least one of `min_rows` / `rows` / `match`. `match` compares
+Each spec needs `target` plus at least one of `min_rows` / `rows` / `match`; a spec without
+them, or with an unknown key, is refused at load. `match` compares
 *stringified* values; use `<null>` in the golden CSV for SQL/JSON null. By default it compares
 distinct sets; pin `rows: N` too if cardinality matters. A golden row's missing trailing cells
 are NULL (prefer `<null>`); a row with more cells than the header is refused.
@@ -2143,7 +2149,8 @@ text `<absent>`. Nothing in an event is rewritten — the stripping is applied t
 only — but a record genuinely carrying that text could not be matched, and the failure would
 present as an unexplained missing column. No golden in this repository needs the literal.
 
-**Two shapes are refused at load, rather than failing after the assertion timeout.** A golden
+**Two shapes are refused when the tier starts, before its first poll, rather than failing
+after the assertion timeout.** A golden
 whose every row is all-`<absent>` strips to nothing: it is not EMPTY, so the empty-golden
 guard cannot see it, but it asserts only "some event carries none of the projected keys" —
 which an unenriched record satisfies, so it would stay green through a total enrichment
@@ -2154,7 +2161,7 @@ without `keys` every compared event projects at least one column. Both raise a
 `<absent>` is a **`file`-assertion feature only.** It has no meaning under `assert.data`,
 which compares against SQL result rows — a `SELECT` always returns every column it names, so
 a value is `None`, never an absent key, and the marker could not match. `load_golden` **refuses**
-it: writing `<absent>` in a `data:` golden raises a `DataSpecError` at load, naming the
+it: writing `<absent>` in a `data:` golden raises a `DataSpecError` when the tier starts, naming the
 column and pointing here, rather than failing as a value mismatch after the full assertion
 timeout.
 

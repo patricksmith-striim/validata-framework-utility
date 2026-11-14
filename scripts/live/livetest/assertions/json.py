@@ -4,7 +4,7 @@ import json
 import time
 from pathlib import Path
 
-from livetest.assertions import AssertionFailed
+from livetest.assertions import AssertionFailed, refuse_unknown_keys
 from livetest.assertions.expected import load_expected_text
 from livetest.resultschema import build_assertion_result
 
@@ -13,12 +13,18 @@ class JsonSpecError(Exception):
     pass
 
 
+#: Every key an `assert.json` spec may carry: what assert_json reads, plus the plugin's routing
+#: keys (`_spec_route` reads source_db and target_db before db).
+JSON_SPEC_KEYS = frozenset({"target", "db", "key", "column", "match", "source_db", "target_db"})
+
+
 def parse_json_specs(raw: list) -> list:
     if not isinstance(raw, list):
         raise JsonSpecError("'assert.json' must be a list of specs")
     for spec in raw:
         if not isinstance(spec, dict):
             raise JsonSpecError(f"json spec must be an object: {spec!r}")
+        refuse_unknown_keys(spec, JSON_SPEC_KEYS, f"json spec {spec.get('target')!r}", JsonSpecError)
         for field in ("target", "db", "column", "match"):
             if not isinstance(spec.get(field), str) or not spec.get(field):
                 raise JsonSpecError(f"json spec needs a string '{field}': {spec!r}")
