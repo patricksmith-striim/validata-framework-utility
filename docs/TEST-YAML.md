@@ -2264,6 +2264,7 @@ assert:
       key: [user_id]                  # required; key column(s) identifying a row (string or list)
       column: user_responses          # required; the JSON column to compare
       match: expected/user_data.json  # required; golden file, test-dir-relative
+      unordered: [questions, "questions[].answers"]   # optional; arrays whose order is not checked
 ```
 The golden is a JSON **array of row objects**, each carrying the key column(s) plus the JSON
 column, e.g.:
@@ -2275,13 +2276,23 @@ column, e.g.:
 ```
 Reads `SELECT <key…>, <column> FROM <target>` for **all** rows via the resolved db's admin.
 Key sets are checked first — a missing/extra key (too few/too many rows) fails immediately.
-For each shared key, the JSON column is compared *semantically*: object keys are
-order-independent, and arrays are canonicalized (elements recursively sorted by their
-canonical serialized form) before comparing, so writer-side array order never causes a
-flake. The first differing path is reported, e.g.
-`user_data key=('1',): questions[0].answers[0].RESPONSE (expected 'R1', got None)`. A boolean
-equals only a boolean: `true` is not `1`. Polls until every key matches or the manifest `timeout`
-expires.
+Each key names one row: a golden with two rows for one key (or for `1` and `"1"`, since keys
+are compared as text) is refused when the tier starts, as is a golden object that names one
+member twice, and a read that returns two rows for one key fails. For each shared key, the JSON
+column is compared *semantically*: object keys are order-independent, and **arrays are compared
+in order**, since position is part of an array's value (a SQL `ARRAY` column, a list of steps).
+List under `unordered:` the arrays whose order the writer does not fix, such as child rows
+aggregated into a document: each path is compared as a multiset (elements sorted by their
+canonical serialized form, duplicates counted). A path is member names joined by `.`, with `[]`
+for every element of an array: `questions` is the array in the `questions` member,
+`"questions[].answers"` the `answers` array inside each of its elements, and `$` the column value
+itself when it is an array (`"$[]"` its inner arrays). A path covers that array only; arrays
+inside its elements keep their order unless listed too. A path that names no array in the golden
+is refused when the tier starts. In a flow list (`[a, b]`) quote a path that contains `[]`. The first
+differing path is reported, e.g.
+`user_data key=('1',): questions[0].answers[0].RESPONSE (expected 'R1', got None)`. Values are
+compared by type: a boolean equals only a boolean (`true` is not `1`), and an integer only an
+integer (`1` is not `1.0`). Polls until every key matches or the manifest `timeout` expires.
 
 `stable_seconds: N` on a json spec keeps reading for N seconds after every json spec first
 passes (the longest window in the group); a read that no longer passes (a value a still-running
