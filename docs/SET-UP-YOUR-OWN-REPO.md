@@ -109,7 +109,10 @@ It refuses, and changes nothing, when:
 - the checkout has local changes: a changed file, or a file git does not ignore that is not part of
   the framework (exit 3). It is a read-only copy: move or discard the changes, and report the bug
   they were fixing as an issue;
-- the pin is a branch, a short commit, or a tag the repository does not have (exit 2).
+- the pin is a branch, a short commit, or a tag the repository does not have (exit 2);
+- your repo is still inside the framework checkout (the template or the example, run where it
+  ships) and neither `--home` nor `FRAMEWORK_CHECKOUT` names a framework checkout (exit 2): copy the
+  folder out of the framework first.
 
 Exit 4 is a git or network failure, 5 a failed install. Options:
 
