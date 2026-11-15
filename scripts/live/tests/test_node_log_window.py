@@ -9,6 +9,8 @@ expect_halt_contains intermittently reported one or both required substrings mis
 one varied with where the 20 KB boundary fell. That is the signature of a truncated window, not
 of a wrong expectation or a product bug.
 """
+import pytest
+
 from livetest import plugin, stack
 
 
@@ -177,3 +179,75 @@ def test_failed_marks_fail_a_docker_halt_check_end_to_end():
         assert_halt(Halted(), "NS.App", timeout=1, contains=("ORA-00001",), mode="docker",
                     log_tail=lambda: plugin._halt_log_tail(_Ctx(), marks, run=failing))
     assert exc.value.records == []
+
+
+# ------------------------------------------------- node boundaries in the halt-reason chain
+#
+# Each node's slice starts at a byte mark, which can fall inside another app's multi-line
+# record, so a slice may begin with a continuation line. Joined into one text, that line used
+# to continue the previous node's last record and inherit its namespace.
+
+from livetest.assertions import AssertionFailed  # noqa: E402
+from livetest.assertions.halt import assert_halt, log_records  # noqa: E402
+
+_MINE = "2026-11-14 12:00:00 ERROR NS_mine.App NullPointerException\n"
+_FOREIGN_CONT = "    caused by: required refusal\n2026-11-14 12:00:01 ERROR NS_other.App boom\n"
+
+
+class _Halted:
+    def current_status(self, app):
+        return "CRASH"
+
+
+def _slices(*texts):
+    """A docker-exec double: the i-th app node's slice is texts[i]."""
+    by_node = dict(zip(stack.app_nodes(), texts))
+
+    def _run(argv):
+        return type("R", (), {"stdout": by_node.get(argv[2], ""), "returncode": 0})()
+    return _run
+
+
+def _halt_on(run):
+    marks = {n: 0 for n in stack.app_nodes()}
+    return assert_halt(_Halted(), "NS_mine.App", timeout=1, poll=0, contains=("required refusal",),
+                       log_tail=lambda: plugin._node_log_since(_Ctx(), marks, run=run))
+
+
+def test_a_continuation_at_the_start_of_another_nodes_slice_is_not_this_namespaces():
+    assert len(stack.app_nodes()) >= 2
+    with pytest.raises(AssertionFailed, match="do not name"):
+        _halt_on(_slices(_MINE, _FOREIGN_CONT))
+
+
+def test_a_continuation_in_the_same_nodes_slice_still_counts():
+    # The control: the same line, inside node A's own NS_mine record.
+    recs = _halt_on(_slices(_MINE + "    caused by: required refusal\n", _FOREIGN_CONT))
+    assert recs[0]["status"] == "passed" and "verified" in recs[0]["detail"]
+
+
+def test_a_slice_without_a_trailing_newline_does_not_run_into_the_next_node():
+    with pytest.raises(AssertionFailed, match="do not name"):
+        _halt_on(_slices(_MINE.rstrip("\n"), _FOREIGN_CONT))
+
+
+def test_each_nodes_slice_starts_its_own_record():
+    marks = {n: 0 for n in stack.app_nodes()}
+    text = plugin._node_log_since(_Ctx(), marks, run=_slices(_MINE, _FOREIGN_CONT))
+    recs = log_records(text)
+    assert recs[0].strip() == _MINE.strip()
+    assert any(r.strip() == "caused by: required refusal" for r in recs), recs
+
+
+def test_empty_slices_still_read_as_no_log():
+    # assert_halt's native-mode caveat (and any caller's emptiness check) tests text.strip().
+    marks = {n: 0 for n in stack.app_nodes()}
+    assert plugin._node_log_since(_Ctx(), marks, run=_slices("", "")).strip() == ""
+
+
+def test_the_poison_scan_still_sees_every_nodes_text():
+    from livetest import striim_provision as sp
+    marks = {n: 0 for n in stack.app_nodes()}
+    text = plugin._node_log_since(_Ctx(), marks, run=_slices(
+        "ok\n", "java.util.zip.ZipException: invalid LOC header (bad signature)\n"))
+    assert sp.op_loader_poisoned(text)

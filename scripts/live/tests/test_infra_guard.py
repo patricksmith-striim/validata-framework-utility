@@ -11,6 +11,8 @@ reason, and no live item executed. Everything else keeps its exit status.
 """
 import types
 
+import pytest
+
 from livetest import plugin
 from livetest.plugin import _slt_infra_guard
 
@@ -103,6 +105,23 @@ def test_an_errored_live_case_counts_as_executed(monkeypatch):
     monkeypatch.delenv("SLT_ALLOW_NO_CLUSTER", raising=False)
     s = _Session({"skipped": [_blocked()], "error": [_Rep(LIVE2)]})
     assert _slt_infra_guard(s, 0) == 0
+
+
+@pytest.mark.parametrize("bucket", ["xpassed", "xfailed"])
+@pytest.mark.parametrize("cause", ["cluster", "docker"])
+def test_an_expected_failure_outcome_counts_as_executed(monkeypatch, bucket, cause):
+    # An xfail'd case deployed and ran its assertions; pytest files it under "xpassed" or
+    # "xfailed", not "passed"/"failed". Beside an unrelated infra skip that is a partial run.
+    monkeypatch.delenv("SLT_ALLOW_NO_CLUSTER", raising=False)
+    s = _Session({"skipped": [_blocked(cause=cause)], bucket: [_Rep(LIVE2)]})
+    assert _slt_infra_guard(s, 0) == 0
+
+
+@pytest.mark.parametrize("bucket", ["xpassed", "xfailed"])
+def test_a_non_live_expected_failure_does_not_mask_it(monkeypatch, bucket):
+    monkeypatch.delenv("SLT_ALLOW_NO_CLUSTER", raising=False)
+    s = _Session({"skipped": [_blocked()], bucket: [_unit()]})
+    assert _slt_infra_guard(s, 0) == 1
 
 
 def test_the_opt_out(monkeypatch):

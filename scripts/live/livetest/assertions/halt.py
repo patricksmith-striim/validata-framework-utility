@@ -12,17 +12,26 @@ from livetest.striim import TERMINAL_STATUSES, StriimTimeout
 #: first timestamped line is a record of its own.
 LOG_RECORD_START = re.compile(r"^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}")
 
+#: Joins the log text of two app nodes (plugin._node_log_since). A node's text starts at a byte mark
+#: that can fall inside another app's multi-line record, so its first lines may be a continuation;
+#: across this boundary they start a record of their own and never continue the other node's last
+#: record. Whitespace only, so text made of empty slices still strips to "".
+NODE_LOG_BOUNDARY = "\n\x1e\n"
+
 
 def log_records(text: str) -> list[str]:
-    """``text`` split into server-log records, each with its continuation lines (LOG_RECORD_START)."""
-    records, current = [], ""
-    for line in text.splitlines(keepends=True):
-        if LOG_RECORD_START.match(line) and current:
+    """``text`` split into server-log records, each with its continuation lines (LOG_RECORD_START).
+    A record never spans a NODE_LOG_BOUNDARY."""
+    records = []
+    for node_text in text.split(NODE_LOG_BOUNDARY):
+        current = ""
+        for line in node_text.splitlines(keepends=True):
+            if LOG_RECORD_START.match(line) and current:
+                records.append(current)
+                current = ""
+            current += line
+        if current:
             records.append(current)
-            current = ""
-        current += line
-    if current:
-        records.append(current)
     return records
 
 

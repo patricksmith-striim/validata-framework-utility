@@ -37,7 +37,8 @@ from livetest.assertions.checkpoint_history import (
     parse_checkpoint_history_spec,
 )
 from livetest.assertions.jmx import JmxSpecError, assert_jmx, parse_jmx_specs, render_row_keys
-from livetest.assertions.halt import assert_halt, accept_expected_halt, skipped_by_startup_halt
+from livetest.assertions.halt import (NODE_LOG_BOUNDARY, assert_halt, accept_expected_halt,
+                                     skipped_by_startup_halt)
 from livetest import recovery
 from livetest import outage
 from livetest import appactions
@@ -583,8 +584,8 @@ def _slt_infra_guard(session, exitstatus):
         return exitstatus
 
     # "error" as well as "failed": an item that dies in setup or teardown lands there, and it
-    # still executed.
-    if _live("passed") or _live("failed") or _live("error"):
+    # still executed. So did an xfail'd case: pytest files it under "xpassed" or "xfailed".
+    if any(_live(k) for k in ("passed", "failed", "error", "xpassed", "xfailed")):
         unbuilt = [r for r in blocked if getattr(r, "_slt_infra_skip", "") == "build"]
         if not unbuilt:
             return exitstatus
@@ -1034,6 +1035,8 @@ def _node_log_since(ctx, marks: dict, run=None, nbytes: int = 20000, errors: lis
     to the fixed tail when the log is now SHORTER than the mark -- it rotated or was truncated
     mid-test, so everything in it was written after the mark. A node that could not be read
     contributes nothing; when `errors` is given, why is appended to it, one entry per node.
+    Nodes are joined by NODE_LOG_BOUNDARY, so a log record never runs from one node's text into
+    the next.
     """
     if getattr(ctx, "mode", None) != "docker":
         return ""
@@ -1058,7 +1061,7 @@ def _node_log_since(ctx, marks: dict, run=None, nbytes: int = 20000, errors: lis
         except Exception as e:
             if errors is not None:
                 errors.append(f"{node}: {e}")
-    return "\n".join(out)
+    return NODE_LOG_BOUNDARY.join(out)
 
 
 _HALT_LOG_READ_TIMEOUT_S = 60

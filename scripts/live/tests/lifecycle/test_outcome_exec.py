@@ -7,7 +7,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from .exec_harness import run_case  # noqa: F401 - run_case is a fixture
+from .exec_harness import FIXTURES as FIXTURES_LIFECYCLE, run_case  # noqa: F401 - run_case is a fixture
 
 pytest_plugins = ["pytester"]
 
@@ -156,3 +156,60 @@ def test_keep_on_error_drops_a_skip_after_deploy(run_case):
     assert run.junit()[0] == "skipped" and "deploy" in run.names(), run.text
     assert "SLT_KEEP_RESOURCES_ON_ERROR is set" not in run.text
     assert run.dump()["namespaces"] == []
+
+
+# A partial run: one case is executed and reports an expected-failure outcome, the other could not
+# run because Docker was unavailable for its service. The infra guard keeps the exit status of a
+# partial run, so the executed XPASS/XFAIL must count as executed.
+
+_DOCKERLESS = r'''
+
+import os as _os
+from livetest.services import DockerUnavailable as _DockerUnavailable
+
+_resolve_before_block = I.resolve_service
+
+
+def _resolve_blocked(infra, svc, env, started, resolve_fn, progress=None):
+    if "zz-blocked" in _os.environ.get("PYTEST_CURRENT_TEST", ""):
+        raise _DockerUnavailable("Cannot connect to the Docker daemon")
+    return _resolve_before_block(infra, svc, env, started, resolve_fn, progress=progress)
+
+
+I.resolve_service = _resolve_blocked
+'''
+
+
+def _with_dockerless_sibling(root, name):
+    blocked = root / "cases" / "zz-blocked"
+    shutil.copytree(FIXTURES_LIFECYCLE / "legacy", blocked)
+    y = blocked / "test.yaml"
+    y.write_text(y.read_text().replace("name: lc-legacy", "name: zz-blocked"))
+    with (root / "conftest.py").open("a") as f:
+        f.write(_DOCKERLESS)
+
+
+def test_an_xpass_beside_a_docker_skip_is_a_partial_run(run_case):
+    run = run_case("legacy", edit=lambda y: y + "xfail: {reason: known defect, tiers: [data], strict: false}\n",
+                   prepare=_with_dockerless_sibling, args=("-rs",))
+    assert "no Docker): Cannot connect to the Docker daemon" in run.text and "XPASS" in run.text, run.text
+    run.result.assert_outcomes(skipped=1, xpassed=1)
+    assert "PROVED NOTHING" not in run.text and run.ret == 0, run.text
+
+
+def test_an_xfail_beside_a_docker_skip_is_a_partial_run(run_case):
+    run = run_case("exact-wrong-golden", {"initial_load": True}, fixtures=EVIDENCE_CASES, edit=XFAIL_DATA,
+                   prepare=_with_dockerless_sibling, args=("-rs",))
+    assert "no Docker): Cannot connect to the Docker daemon" in run.text, run.text
+    run.result.assert_outcomes(skipped=1, xfailed=1)
+    assert "PROVED NOTHING" not in run.text and run.ret == 0, run.text
+
+
+def test_an_all_docker_skipped_run_still_proves_nothing(run_case):
+    # The control: the same blocked sibling alone still fails the run.
+    def only_blocked(root, name):
+        _with_dockerless_sibling(root, name)
+        shutil.rmtree(root / "cases" / "legacy")
+    run = run_case("legacy", prepare=only_blocked)
+    run.result.assert_outcomes(skipped=1)
+    assert "PROVED NOTHING" in run.text and run.ret == 1, run.text
