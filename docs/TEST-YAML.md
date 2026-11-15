@@ -2438,6 +2438,8 @@ case fails when:
 
 - the first read shows no checkpoint (nothing anchors the replay);
 - a later read shows a checkpoint the first did not;
+- a later read shows no checkpoint at all (the history survives a kill restart, so an empty read
+  cannot show that nothing new was recorded);
 - a read fails, or a row has no `checkpointRecordedTime`.
 
 Rows are compared with each other, never with the harness clock, so the server's time zone does

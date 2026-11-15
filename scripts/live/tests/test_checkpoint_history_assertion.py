@@ -265,6 +265,38 @@ def test_predates_fails_without_a_checkpoint_before_the_seed():
         assert_checkpoint_predates(w, SPEC)
 
 
+@pytest.mark.parametrize("interrupt, restored, empty", [
+    ([], [], "interrupt"), ([A], [], "restored"), ([], [A], "interrupt"),
+])
+def test_predates_fails_when_a_read_after_the_seed_comes_back_empty(interrupt, restored, empty):
+    # A history that existed before the seed does not vanish: a restored app still shows it
+    # after a kill restart. An empty later read shows nothing new, so it cannot show that no
+    # checkpoint was recorded after the seed.
+    w = _run([A], interrupt, restored)
+    with pytest.raises(AssertionFailed, match=f"the '{empty}' read shows no checkpoint") as e:
+        assert_checkpoint_predates(w, SPEC)
+    assert e.value.records[0]["status"] == "failed"
+
+
+def test_predates_fails_when_a_later_show_fails():
+    # The real client, whose failed SHOW must not pass as a later read with nothing new in it.
+    from livetest.striim import StriimClient
+    answers = {"seed": [{"executionStatus": "Success", "output": [A]}],
+               "interrupt": [{"executionStatus": "Success", "output": [A]}],
+               "restored": [{"executionStatus": "Failure", "failureMessage": "HTTP 500"}]}
+
+    class Api:
+        def post_tungsten_line(self, line, timeout=None):
+            return answers[phase]
+    client = StriimClient.__new__(StriimClient)
+    client.api = Api()
+    w = CheckpointWitness(client, "NS.App", now=lambda: "t")
+    for phase in CheckpointWitness.PHASES:
+        w.capture(phase)
+    with pytest.raises(AssertionFailed, match="the 'restored' read"):
+        assert_checkpoint_predates(w, SPEC)
+
+
 def test_predates_keys_rows_by_content_not_by_serial_number():
     # serialNo is a newest-first rank: A is 1 before B lands and 2 after. Ten rows are kept,
     # the oldest overwritten, so a dropped old row is not a new one.

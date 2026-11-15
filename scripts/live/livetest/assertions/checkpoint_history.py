@@ -111,7 +111,9 @@ def _row_key(row):
 def assert_checkpoint_predates(witness: CheckpointWitness, spec: dict) -> list[dict]:
     """Pass when a checkpoint was recorded before the seed and none after it, up to the first
     read after the restore. Rows are compared with each other, never with the harness clock,
-    so the server's time zone does not matter.
+    so the server's time zone does not matter. A later read must show the history again: it
+    survives a kill restart, so an empty `interrupt` or `restored` read after a non-empty `seed`
+    read proves nothing and fails.
 
     The `interrupt` read is the last one before the command; a checkpoint recorded between it
     and the command shows up in the `restored` read instead, which is taken before the restored
@@ -131,6 +133,12 @@ def assert_checkpoint_predates(witness: CheckpointWitness, spec: dict) -> list[d
         if not before:
             detail = (f"no checkpoint was recorded before seed {seed}: nothing shows where the "
                       f"restart resumed from")
+        elif empty := next((p for p in ("interrupt", "restored") if not reads[p]["rows"]), None):
+            # History survives a kill restart, so the history the seed read showed is still
+            # there. An empty later read shows nothing new only by showing nothing.
+            detail = (f"the '{empty}' read shows no checkpoint, though the 'seed' read showed "
+                      f"{len(before)}: an empty read cannot show that none was recorded after "
+                      f"seed {seed}")
         else:
             seen = set(before)
             for phase in ("interrupt", "restored"):
