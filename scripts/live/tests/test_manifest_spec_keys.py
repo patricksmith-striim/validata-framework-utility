@@ -202,6 +202,50 @@ def test_nothing_and_raw_specs_keep_their_own_refusals(tmp_path):
     assert "invalid-nothing-spec" in msg
 
 
+TYPED_INCOMPLETE = [
+    ("data", "{target_db: postgres-target, match: g.csv, exact: {columns: {id: integer}}}",
+     "{target_db: postgres-target, target: t, match: g.csv, exact: {columns: {id: integer}}}", ["target"]),
+    ("data", "{target_db: postgres-target, match: g.csv, exact: true}",
+     "{target_db: postgres-target, target: t, match: g.csv, exact: true}", ["target"]),
+    ("file", "{match: g.csv, exact: {columns: {id: integer}}}",
+     "{path: '${OWNED_DIR}/out', match: g.csv, exact: {columns: {id: integer}}}", ["path"]),
+    ("diff", "{db: postgres-source, exact: {}}",
+     "{db: postgres-source, source: s, target: t, exact: {}}", ["source", "target"]),
+    ("diff", "{db: postgres-source, source: s, exact: {columns: {id: integer}}}",
+     "{db: postgres-source, source: s, target: t, exact: {columns: {id: integer}}}", ["target"]),
+]
+
+
+@pytest.mark.parametrize("tier,spec,complete,missing", TYPED_INCOMPLETE,
+                         ids=[f"{t}-{'-'.join(m)}" for t, _, _, m in TYPED_INCOMPLETE])
+def test_a_typed_exact_spec_missing_its_endpoint_is_refused_at_load(tmp_path, tier, spec, complete, missing):
+    # The typed readers index spec["target"] / ["path"] / ["source"] after deploy; at load the
+    # spec had only its keys checked, so the KeyError came after provisioning.
+    body = "exact: {version: 1}\nassert:\n  " + tier + ":\n    - {spec}\n"
+    files = ("app.tql", "g.csv")
+    load_manifest(_case(tmp_path, body.replace("{spec}", complete), files))
+    msg = _refused(tmp_path, body.replace("{spec}", spec), files=files)
+    assert f"assert.{tier}[0]" in msg and f"needs {missing}" in msg
+
+
+NOTHING_ELSEWHERE = [
+    ("json", "{target: t, db: spanner-google, key: id, column: c, match: g.json, unorderd: [a], "
+             "nothing: {window: 5s, where: {id: 1}}}"),
+    ("gcs", "{bucket: b, object: o, size: 3, sha265: '00', nothing: {window: 5s, where: {id: 1}}}"),
+    ("diff", "{source: a, target: b, nothing: {window: 5s, where: {id: 1}}}"),
+    ("json", "{target: t, db: spanner-google, key: id, column: c, match: g.json, "
+             "nothing: {window: 5s, where: {id: 1}}}"),
+]
+
+
+@pytest.mark.parametrize("tier,spec", NOTHING_ELSEWHERE, ids=["json-typo", "gcs-typo", "diff", "json"])
+def test_nothing_outside_data_and_file_does_not_exempt_a_spec_from_its_checks(tmp_path, tier, spec):
+    # nothing: is a data/file check (livetest.nothing validates only those tiers); on another
+    # tier it skipped the spec's own key check, so `unorderd` or `sha265` loaded.
+    msg = _refused(tmp_path, f"assert:\n  {tier}:\n    - {spec}\n")
+    assert f"assert.{tier}[0]" in msg and "unknown key" in msg and "'nothing'" in msg
+
+
 # ---- block entries (FW-80) ------------------------------------------------------------------------
 
 def test_a_seed_entry_typo_is_refused(tmp_path):

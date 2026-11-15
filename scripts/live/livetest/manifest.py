@@ -1125,14 +1125,20 @@ def _fixture_timeout(raw, path):
     return value
 
 
+# The fields livetest.exactdata's typed readers index for each tier.
+_TYPED_ENDPOINTS = {"data": ("target",), "file": ("path",), "diff": ("source", "target")}
+
+
 def _check_assert_specs(assert_, path) -> None:
     """Parse every data/diff/file/gcs/json spec at load, as the run would after deploy, so an
     incomplete spec or a key no assertion reads is refused before anything is provisioned.
 
     Each spec is parsed on its own copy: the parsers normalize in place (a json `key` string
-    becomes a list) and the run parses again. `nothing:` and `raw:` specs are validated by
-    livetest.nothing and livetest.rawfile. A typed spec (`exact:` on data or file, a mapping
-    `exact:` on diff) has only its keys checked here: canon validates the rest, as the run does.
+    becomes a list) and the run parses again. `nothing:` on data/file and `raw:` on file are
+    validated by livetest.nothing and livetest.rawfile; on any other tier `nothing:` is an
+    unknown key. A typed spec (`exact:` on data or file, a mapping `exact:` on diff) has its
+    keys and the endpoint its reader indexes (data `target`, file `path`, diff `source` and
+    `target`) checked here: canon validates the rest, as the run does.
     """
     from livetest.assertions import refuse_unknown_keys
     from livetest.assertions.data import DATA_SPEC_KEYS, DataSpecError, parse_data_specs
@@ -1159,11 +1165,15 @@ def _check_assert_specs(assert_, path) -> None:
                 raise ManifestError(f"{path}: {e}") from None
         for i, spec in enumerate(specs):
             try:
-                if isinstance(spec, dict) and ("nothing" in spec or (tier == "file" and "raw" in spec)):
+                if isinstance(spec, dict) and tier in ("data", "file") and (
+                        "nothing" in spec or (tier == "file" and "raw" in spec)):
                     continue
                 if isinstance(spec, dict) and "exact" in spec and (
                         tier in ("data", "file") or isinstance(spec["exact"], dict)):
                     refuse_unknown_keys(spec, keys, f"{tier} spec", error)
+                    missing = [k for k in _TYPED_ENDPOINTS[tier] if not spec.get(k)]
+                    if missing:
+                        raise error(f"{tier} spec with exact needs {missing}")
                     continue
                 parse([copy.deepcopy(spec)])
             except error as e:

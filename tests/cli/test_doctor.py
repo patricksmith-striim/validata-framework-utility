@@ -521,6 +521,24 @@ def test_case_manifest_with_a_broken_assert_spec_fails(tmp_path):
         assert "assert.data[0]" in c.message and why in c.message
 
 
+def test_case_manifest_with_an_incomplete_typed_or_nothing_spec_fails(tmp_path):
+    # A typed exact spec with no target, and a json spec whose typo hid behind nothing:, used to
+    # report "test.yaml loads".
+    for name, body, why in (
+            ("typed", "exact: {version: 1}\nassert:\n  data:\n"
+                      "    - {target_db: postgres-target, match: g.csv, exact: true}\n", "needs ['target']"),
+            ("nothing", "assert:\n  json:\n    - {target: t, db: spanner-google, key: id, column: c, "
+                        "match: g.json, unorderd: [a], nothing: {window: 5s, where: {id: 1}}}\n",
+             "unknown key(s) ['nothing', 'unorderd']")):
+        d = tmp_path / name
+        d.mkdir()
+        (d / "g.csv").write_text("id\n1\n")
+        (d / "test.yaml").write_text(f"name: {name}\ntql: app.tql\n{body}")
+        c = one_fail(doctor.check_manifests([d / "test.yaml"]))
+        assert c.subject == f"case {name}" and c.code == CONFIG
+        assert why in c.message
+
+
 def test_case_manifests_load_with_their_own_tiers_loader(project):
     # review D1: an integration or perf case has no `tql:`, so the live loader failed it
     from striim_test import project_io

@@ -1212,7 +1212,8 @@ for Kafka records use `value.id`. Data specs name `target` and `db` (or
 `target_db`); file specs name `path`. Data absence specs take only `target`, `db`/`target_db`, `nothing` and optional
 `payload`; file absence specs take only `path` and `nothing`. `project` is refused
 here: Kafka selectors already use full record paths. No content match/count/exact
-key can coexist. Kafka may choose `payload: json` (default `avro`).
+key can coexist. Kafka may choose `payload: json` (default `avro`). On a `diff`, `gcs` or
+`json` spec `nothing` is an unknown key, refused at load.
 
 The case must have `lifecycle.completion.kind: sentinel`, and that sentinel must
 observe the same output table, topic or file. Invalid combinations, unknown keys
@@ -1803,7 +1804,8 @@ The same rule applies to `assert:` tier names in live and integration cases alik
 case it also applies inside `op:`/`udf:` entries, `ddl:`, `seed:`, `server_files:` and
 `generate:` entries, `action:` entries (including `stop_start_cycle` and its `concurrent:`
 loops), and every `data`, `diff`, `file`, `gcs` and `json` assertion spec. Those specs are also
-checked for their required keys at load (a `data` spec with no `min_rows`/`rows`/`match`, say),
+checked for their required keys at load (a `data` spec with no `min_rows`/`rows`/`match`, say,
+or a typed `exact` spec without the `target`, `path` or `source`/`target` its reader reads),
 so `striim-test doctor --case` reports a misspelt `multset:` or `macth:` instead of the run
 quietly falling back to the weaker compare after deploy.
 
