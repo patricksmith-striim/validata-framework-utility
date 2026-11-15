@@ -14,6 +14,24 @@ class DataSpecError(Exception):
     pass
 
 
+#: The longest `stable_seconds` window: what fits in a signed 32-bit count of milliseconds, the
+#: bound the framework already puts on a Postgres statement budget (a little under 25 days).
+MAX_STABLE_SECONDS = 2_147_483_647 / 1000
+
+
+def check_stable_seconds(value, where: str, error: type[Exception]) -> None:
+    """Refuse a `stable_seconds` that is not a finite number of seconds from 0 to the bound.
+
+    The window starts at the first pass and is held in full, past `timeout` if it must, so an
+    infinite window never returns; `nan` compares false against everything, so the window would
+    be skipped. The chained comparison is false for `nan` and for either infinity, and also holds
+    for an integer too large to convert to a float.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not 0 <= value <= MAX_STABLE_SECONDS:
+        raise error(f"{where}: 'stable_seconds' must be a finite number of seconds from 0 to"
+                    f" {MAX_STABLE_SECONDS}, got {value!r}")
+
+
 #: Golden cell meaning "this column must be ABSENT from the record", as distinct from
 #: present-and-empty. A CSV row is rectangular and `csv.DictReader` yields '' for a blank
 #: cell, so without this there is no way to write a golden that asserts a value column on
@@ -183,10 +201,7 @@ def parse_data_specs(raw: list) -> list[dict]:
                 raise DataSpecError(
                     f"data spec {spec['target']!r}: 'rows' must be non-negative, got {rows}")
         if "stable_seconds" in spec:
-            v = spec["stable_seconds"]
-            if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
-                raise DataSpecError(
-                    f"data spec {spec['target']!r}: 'stable_seconds' must be a non-negative number, got {v!r}")
+            check_stable_seconds(spec["stable_seconds"], f"data spec {spec['target']!r}", DataSpecError)
     return raw
 
 

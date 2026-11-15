@@ -4,7 +4,7 @@ import time
 from collections import Counter
 
 from livetest.assertions import AssertionFailed, NotYetReadable, refuse_unknown_keys
-from livetest.assertions.data import distinct_set, normalized_row
+from livetest.assertions.data import check_stable_seconds, distinct_set, normalized_row
 from livetest import canon as _slt_canon   # legacy-text/1 (C8.4)
 from livetest.resultschema import build_assertion_result
 
@@ -33,9 +33,7 @@ def parse_diff_specs(raw: list) -> list[dict]:
         if "fold_names" in spec and not isinstance(spec["fold_names"], bool):
             raise DiffSpecError(f"diff spec 'fold_names' must be a boolean: {spec!r}")
         if "stable_seconds" in spec:
-            v = spec["stable_seconds"]
-            if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
-                raise DiffSpecError(f"diff spec 'stable_seconds' must be a non-negative number: {spec!r}")
+            check_stable_seconds(spec["stable_seconds"], f"diff spec {spec['target']!r}", DiffSpecError)
     return raw
 
 

@@ -6,7 +6,7 @@ from collections import Counter
 from pathlib import Path
 
 from livetest.assertions import AssertionFailed, refuse_unknown_keys
-from livetest.assertions.data import apply_null, distinct_set, normalized_row, read_golden_csv, sorted_rows_for_display, strip_absent   # reuse the exact distinct-set compare
+from livetest.assertions.data import apply_null, check_stable_seconds, distinct_set, normalized_row, read_golden_csv, sorted_rows_for_display, strip_absent   # reuse the exact distinct-set compare
 from livetest.assertions.expected import load_expected_text
 from livetest.resultschema import build_assertion_result
 
@@ -106,9 +106,7 @@ def _parse_ordering_specs(spec: dict) -> None:
                     f"file spec {path!r}: order[{i}] must be {{before: {{...}}, after: {{...}}}}"
                     " with non-empty column selectors")
     if "stable_seconds" in spec:
-        v = spec["stable_seconds"]
-        if isinstance(v, bool) or not isinstance(v, (int, float)) or v < 0:
-            raise FileSpecError(f"file spec {path!r}: 'stable_seconds' must be a non-negative number")
+        check_stable_seconds(spec["stable_seconds"], f"file spec {path!r}", FileSpecError)
 
 
 def _selector_matches(row: dict, selector: dict) -> bool:

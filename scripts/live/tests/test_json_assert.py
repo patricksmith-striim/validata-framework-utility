@@ -277,3 +277,105 @@ def test_assert_json_requires_json_capable_admin(tmp_path):
 
     with pytest.raises(JsonSpecError):
         assert_json(NoJsonAdmin(), [spec], tmp_path, timeout=0, poll=0, db="postgres")
+
+
+# ---- stable_seconds: hold a passing JSON assertion for N seconds -------------------------------
+
+
+class SequenceAdmin:
+    """Each read returns the next state; the last one repeats. A state is a row list, or an
+    exception instance to raise."""
+    def __init__(self, *states):
+        self.states, self.reads = list(states), 0
+
+    def select_json_rows(self, table, key_cols, column):
+        state = self.states[min(self.reads, len(self.states) - 1)]
+        self.reads += 1
+        if isinstance(state, Exception):
+            raise state
+        return state
+
+
+_N1 = [(("1",), {"n": 1})]
+_N2 = [(("1",), {"n": 2})]
+
+
+def _n_golden(tmp_path):
+    _write_golden(tmp_path, [{"user_id": "1", "user_responses": {"n": 1}}])
+
+
+def test_parse_json_specs_accepts_stable_seconds():
+    assert parse_json_specs([_base_spec(stable_seconds=0)])
+    assert parse_json_specs([_base_spec(stable_seconds=2.5)])
+
+
+@pytest.mark.parametrize("bad", [-1, "5", True, None, [5]])
+def test_parse_json_specs_refuses_a_bad_stable_seconds(bad):
+    with pytest.raises(JsonSpecError, match="stable_seconds"):
+        parse_json_specs([_base_spec(stable_seconds=bad)])
+
+
+def test_without_stable_seconds_a_late_json_change_is_never_read(tmp_path):
+    # The default is unchanged: the first equal read passes.
+    _n_golden(tmp_path)
+    admin = SequenceAdmin(_N1, _N2)
+    records = assert_json(admin, [_base_spec()], tmp_path, timeout=5, poll=0.01)
+    assert records[0]["status"] == "passed" and admin.reads == 1
+
+
+def test_stable_seconds_fails_a_json_value_overwritten_in_the_window(tmp_path):
+    _n_golden(tmp_path)
+    admin = SequenceAdmin(_N1, _N1, _N2)
+    with pytest.raises(AssertionFailed) as ei:
+        assert_json(admin, [_base_spec(stable_seconds=5)], tmp_path, timeout=5, poll=0.01)
+    msg = str(ei.value)
+    assert "passed, then failed within its stable_seconds window" in msg
+    assert "expected 1, got 2" in msg
+    assert admin.reads == 3
+    assert [r["status"] for r in ei.value.records] == ["failed"]
+
+
+def test_stable_seconds_fails_a_json_row_added_in_the_window(tmp_path):
+    _n_golden(tmp_path)
+    admin = SequenceAdmin(_N1, _N1 + [(("2",), {"n": 1})])
+    with pytest.raises(AssertionFailed, match="unexpected key"):
+        assert_json(admin, [_base_spec(stable_seconds=5)], tmp_path, timeout=5, poll=0.01)
+
+
+def test_stable_seconds_passes_an_unchanged_json_value_held_through_the_window(tmp_path):
+    import time
+    _n_golden(tmp_path)
+    admin = SequenceAdmin(_N1)
+    t0 = time.monotonic()
+    records = assert_json(admin, [_base_spec(stable_seconds=0.3)], tmp_path, timeout=5, poll=0.05)
+    assert time.monotonic() - t0 >= 0.3
+    assert admin.reads > 2
+    assert records[0]["status"] == "passed"
+
+
+def test_json_stable_seconds_is_the_longest_of_the_group(tmp_path):
+    import time
+    _n_golden(tmp_path)
+    t0 = time.monotonic()
+    assert_json(SequenceAdmin(_N1), [_base_spec(stable_seconds=0.3), _base_spec()], tmp_path,
+                timeout=5, poll=0.05)
+    assert time.monotonic() - t0 >= 0.3
+
+
+def test_json_stable_seconds_runs_past_the_timeout_when_it_must(tmp_path):
+    # As in assert.data and assert.file: the window starts at the first pass and is held in full.
+    import time
+    _n_golden(tmp_path)
+    t0 = time.monotonic()
+    assert_json(SequenceAdmin(_N1), [_base_spec(stable_seconds=0.3)], tmp_path, timeout=0, poll=0.05)
+    assert time.monotonic() - t0 >= 0.3
+
+
+def test_a_json_read_that_raises_in_the_window_is_not_a_pass(tmp_path):
+    # A JSON read has no "not readable yet" state: a read that raises ends the assertion, so an
+    # unreadable target in the window can neither pass it nor hold it open.
+    _n_golden(tmp_path)
+    admin = SequenceAdmin(_N1, RuntimeError("table gone"))
+    with pytest.raises(RuntimeError, match="table gone"):
+        assert_json(admin, [_base_spec(stable_seconds=5)], tmp_path, timeout=5, poll=0.01)
+    assert admin.reads == 2

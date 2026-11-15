@@ -605,6 +605,18 @@ def test_a_set_only_match_loads_with_a_warning(tmp_path):
     assert "distinct" in checks[1].message and str(d) not in checks[1].message
 
 
+def test_a_non_finite_stable_seconds_fails_the_case(tmp_path):
+    # `.inf` would hold the window open forever and `.nan` would skip it; neither is OK.
+    for value in (".inf", ".nan"):
+        d = tmp_path / ("win" + value.strip("."))
+        d.mkdir()
+        (d / "test.yaml").write_text("name: s\ntql: app.tql\nassert:\n  data:\n"
+                                     f"    - {{target: s.t, rows: 1, stable_seconds: {value}}}\n")
+        checks = doctor.check_manifests([d / "test.yaml"])
+        assert [c.status for c in checks] == [doctor.FAIL], [c.line() for c in checks]
+        assert "stable_seconds" in checks[0].message
+
+
 def test_case_manifest_checks_exact_and_lifecycle(tmp_path):
     d = tmp_path / "vacuous"
     d.mkdir()

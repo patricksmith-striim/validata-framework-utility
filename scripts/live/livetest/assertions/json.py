@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 
 from livetest.assertions import AssertionFailed, refuse_unknown_keys
+from livetest.assertions.data import check_stable_seconds
 from livetest.assertions.expected import load_expected_text
 from livetest.resultschema import build_assertion_result
 
@@ -37,6 +38,8 @@ def parse_json_specs(raw: list) -> list:
             raise JsonSpecError(
                 f"json spec {spec.get('target')!r} needs a 'key' that is a string or non-empty list "
                 f"of strings: {key!r}")
+        if "stable_seconds" in spec:
+            check_stable_seconds(spec["stable_seconds"], f"json spec {spec['target']!r}", JsonSpecError)
     return raw
 
 
@@ -202,11 +205,34 @@ def assert_json(admin, specs: list, basedir, timeout: int, poll: float = 2.0,
 
     expecteds = [_load_expected(s, basedir, tokens) for s in specs]
     deadline = time.monotonic() + timeout
+    # stable_seconds (as in assert.data and assert.file): after every spec first passes, keep
+    # reading for the longest window in the group; a read that no longer passes fails the run, so
+    # a value overwritten by a still-running writer is read instead of missed. A read that raises
+    # ends the assertion as it does before the first pass: it neither passes nor holds the window.
+    stable_for = max((float(s.get("stable_seconds", 0)) for s in specs), default=0.0)
+    passed_at = None
     while True:
         if status_probe:
             status_probe()
         results = [_evaluate(admin, s, exp) for s, exp in zip(specs, expecteds)]
         detail = next((d for ok, d, _, _ in results if not ok), None)
+        if detail is not None and passed_at is not None:
+            records = [
+                build_assertion_result(type="json", status="passed" if ok else "failed", spec=s,
+                                        target=s["target"], db=db, detail="ok" if ok else d,
+                                        expected=None, actual=None)
+                for s, (ok, d, _, _) in zip(specs, results)
+            ]
+            raise AssertionFailed(
+                "json assertion passed, then failed within its stable_seconds window (a late write"
+                f" changed the result):{_format_json_failure(results, expecteds, specs)}", records)
+        if detail is None and stable_for > 0:
+            now = time.monotonic()
+            if passed_at is None:
+                passed_at = now
+            if now - passed_at < stable_for:
+                time.sleep(min(poll or 0.05, max(0.0, stable_for - (now - passed_at))))
+                continue
         if detail is None:
             return [
                 build_assertion_result(type="json", status="passed", spec=s, target=s["target"], db=db,

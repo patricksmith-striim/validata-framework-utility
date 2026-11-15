@@ -209,6 +209,20 @@ def _check_counted_specs(raw: dict, assert_, path, recover, expect_halt: bool) -
             f" a 'lifecycle:' block, or 'expect_halt: true' if the app is meant to halt")
 
 
+def _check_stable_windows(assert_, path) -> None:
+    """A `stable_seconds` on a data, diff, json or file spec is a finite number of seconds from 0
+    to the bound: `.inf` holds the window open forever and `.nan` silently skips it. Checked at
+    load, so `striim-test doctor` refuses it, and again by each tier's spec parser."""
+    if not isinstance(assert_, dict):
+        return
+    from livetest.assertions.data import check_stable_seconds
+    for kind in ("data", "diff", "json", "file"):
+        specs = assert_.get(kind)
+        for i, spec in enumerate(specs if isinstance(specs, list) else []):
+            if isinstance(spec, dict) and "stable_seconds" in spec:
+                check_stable_seconds(spec["stable_seconds"], f"{path}: assert.{kind}[{i}]", ManifestError)
+
+
 class ManifestError(Exception):
     pass
 
@@ -1441,6 +1455,7 @@ def load_manifest(path: Path) -> TestManifest:
             f"{path}: 'recover' requires an assertion beyond 'smoke' -- the point of the "
             f"phase is what survived the interruption, and smoke only re-checks RUNNING")
     _check_counted_specs(raw, assert_, path, recover, expect_halt)
+    _check_stable_windows(assert_, path)
 
     # Option C: `example:` points at the shipped OP example dir (repo-relative). When
     # set, tql/ddl/seed/upload files are read from THERE (the certified shipped files);

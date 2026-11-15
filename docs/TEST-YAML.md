@@ -1962,7 +1962,10 @@ data tiers run after the terminal halt. `stable_seconds: N` on a spec keeps poll
 after every spec on its route first passes; a poll that no longer passes (a late row) fails the
 run, and a poll that cannot read the target counts neither way. The window runs past `timeout` if
 it must. On a `rows:` spec, `elapsed_s` is still the time of the first pass. A typed `exact:` spec
-refuses `stable_seconds`; use `lifecycle:` there.
+refuses `stable_seconds`; use `lifecycle:` there. On every tier that has it (data, diff, json and
+file), `stable_seconds` is a finite number of seconds from 0 to 2147483.647 (a signed 32-bit count
+of milliseconds); `.inf`, `.nan` and anything larger are refused when the manifest loads, which
+`striim-test doctor` reports.
 A Kafka count reads every offset up to the high watermark taken when the read starts (offsets
 that hold no message, such as transaction markers, count as read). It keeps polling while the
 topic does not exist or offsets are unread, and fails at `timeout`; a missing topic never counts
@@ -2279,6 +2282,12 @@ flake. The first differing path is reported, e.g.
 `user_data key=('1',): questions[0].answers[0].RESPONSE (expected 'R1', got None)`. A boolean
 equals only a boolean: `true` is not `1`. Polls until every key matches or the manifest `timeout`
 expires.
+
+`stable_seconds: N` on a json spec keeps reading for N seconds after every json spec first
+passes (the longest window in the group); a read that no longer passes (a value a still-running
+writer overwrote, or a row added) fails the run. The window runs past `timeout` if it must. A
+read that raises ends the assertion, as it does before the first pass. Without it, the first
+read that matches passes.
 
 ### `monitor` — what Striim's monitor shows for a component
 
