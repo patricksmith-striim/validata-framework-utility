@@ -138,28 +138,37 @@ def _check_order(rows: list[dict], edges: list[dict]):
 
 
 def _has_later_value(text: str, start: int, n: int) -> bool:
-    # Scan forward from `start`, skipping wrapper/comma punctuation, trying to decode an
-    # *event object* at each position. Used to distinguish "the file is still being
-    # written" (no event ever follows the failure) from real mid-stream corruption (a
-    # later object still decodes fine, so what we choked on wasn't just a trailing
-    # partial). Only a dict counts -- a partial trailing object like {"data":{"ID" still
-    # contains a decodable bare string ("data"), which isn't an event and must not be
-    # mistaken for one.
+    # Scan forward from `start`, the value that failed to decode, for a later *event object*.
+    # Used to distinguish "the file is still being written" (no event ever follows the
+    # failure) from real mid-stream corruption (a later object still decodes fine, so what we
+    # choked on wasn't just a trailing partial). Only an object at the top level counts: a
+    # last event caught mid-write, {"data":{"id":2},"metadata":{"Op, holds complete nested
+    # objects, and none of them is a later event. Object depth is counted from `start`,
+    # outside strings; array brackets are the wrapper's, as in parse_json_events. Only a
+    # dict counts -- a bare string or number is not an event.
     dec = json.JSONDecoder()
-    j = start
-    while j < n:
-        while j < n and text[j] in " \t\r\n,[]":
-            j += 1
-        if j >= n:
-            return False
-        try:
-            obj, _ = dec.raw_decode(text, j)
-        except json.JSONDecodeError:
-            j += 1
-            continue
-        if isinstance(obj, dict):
-            return True
-        j += 1
+    depth, in_string, escaped = 0, False, False
+    for j in range(start, n):
+        c = text[j]
+        if in_string:
+            if escaped:
+                escaped = False
+            elif c == "\\":
+                escaped = True
+            elif c == '"':
+                in_string = False
+        elif c == '"':
+            in_string = True
+        elif c == "{":
+            if depth == 0 and j > start:
+                try:
+                    if isinstance(dec.raw_decode(text, j)[0], dict):
+                        return True
+                except json.JSONDecodeError:
+                    pass
+            depth += 1
+        elif c == "}":
+            depth = max(depth - 1, 0)
     return False
 
 
@@ -190,7 +199,7 @@ def _parse_json_stream(text: str) -> tuple[list[dict], str | None]:
             obj, end = dec.raw_decode(text, i)
         except json.JSONDecodeError as e:
             remainder = text[i:].strip(" \t\r\n,[]")
-            if remainder and _has_later_value(text, i + 1, n):
+            if remainder and _has_later_value(text, i, n):
                 # Something later in the stream still decodes cleanly, so this wasn't
                 # just a trailing partial being written -- it's corruption in the
                 # middle, and silently truncating here would drop real events.

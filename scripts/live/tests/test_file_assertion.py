@@ -35,6 +35,36 @@ def test_parse_raises_on_mid_stream_corruption():
     with pytest.raises(FileSpecError, match="corrupt"):
         parse_json_events(text)
 
+# A last event caught mid-write holds complete nested objects (`data`, arrays of objects, a
+# string with braces in it). None of them is a later event: only a value outside the failed
+# fragment, at the top level, shows that the stream goes on past it.
+@pytest.mark.parametrize("tail", [
+    '{"data":{"id":2},"metadata":{"Op',
+    '{"data":{"id":2}',
+    '{"data":{"id":2},"rows":[{"x":1},{"x":2}],"metadata":{"Op',
+    '{"data":{"s":"}}"},"m":{"id":9}',
+    '{"data":{"s":"a\\"}}"},"m":{"id":9}',
+], ids=["nested-then-partial", "torn-after-nested", "array-of-objects", "braces-in-string",
+        "escaped-quote"])
+def test_parse_tolerates_a_partial_last_event_with_complete_nested_objects(tail):
+    for text in ('{"data":{"id":1}}\n' + tail, '[\n {"data":{"id":1}},\n ' + tail):
+        assert parse_json_events(text) == [{"data": {"id": 1}}]
+
+def test_parse_still_raises_on_corruption_with_nested_objects_before_a_later_event():
+    text = '{"data":{"id":1}}\n{"data":{"id":oops},"m":{"a":{}}}\n{"data":{"id":3}}'
+    with pytest.raises(FileSpecError, match="corrupt"):
+        parse_json_events(text)
+
+def test_partial_last_event_with_a_nested_object_is_polled_again(tmp_path):
+    # Caught mid-write on the first poll, complete on the second: the poll goes on and passes.
+    reads = ['{"data":{"id":1}}\n{"data":{"id":2},"metadata":{"Op',
+             '{"data":{"id":1}}\n{"data":{"id":2},"metadata":{"OperationName":"INSERT"}}\n']
+    def read(path):
+        return reads.pop(0) if len(reads) > 1 else reads[0]
+    recs = assert_file(read, parse_file_specs([{"path": "/o", "min_events": 2}]), tmp_path,
+                       timeout=30, poll=0.01)
+    assert recs[0]["status"] == "passed" and not reads[1:]
+
 # ---- projection --------------------------------------------------------------
 
 def test_project_data_userdata_all():

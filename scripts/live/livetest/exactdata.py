@@ -212,7 +212,7 @@ def parse_events(text: str, where: str, *, strict=False) -> list[dict]:
         try:
             obj, end = dec.raw_decode(text, i)
         except json.JSONDecodeError as e:
-            if text[i:].strip(" \t\r\n,[]") and _file._has_later_value(text, i + 1, n):
+            if text[i:].strip(" \t\r\n,[]") and _file._has_later_value(text, i, n):
                 raise canon.CanonError(f"invalid-value:actual:{where}", f"corrupt JSON event stream at {i}: {e}") from None
             break
         if isinstance(obj, dict):
