@@ -15,12 +15,15 @@ not alter the artifact. Trade-off: the build's `-DskipTests` test COMPILE (which
 Java-16+ construct in a test before it breaks a Java-11 release build) no longer re-runs for a
 test-only edit; it fires on the next rebuild from any main/pom change, and in CI.
 
-Mtimes cannot see a DELETED file, so each build writes the names of its inputs beside the jar
-(`<jar>.sources`), relative to the module dir. A jar with no record, or a recorded input that is
-gone, is stale.
+Mtimes cannot see a DELETED file, nor bytes restored with an old mtime (a checkout, an archive
+extract, a copy that preserves timestamps), so each build writes a record of its inputs beside the
+jar (`<jar>.sources`): a header line, then one `<sha256>  <path>` line per input, the path relative
+to the module dir. A jar with no record or a record without that header, a recorded input that is
+gone, and an input whose content no longer matches its digest are all stale.
 """
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 from pathlib import Path
@@ -28,6 +31,7 @@ from pathlib import Path
 _ADD_SOURCE_RE = re.compile(r"<source>\s*([^<]+?)\s*</source>")
 _COMMENT_RE = re.compile(r"<!--.*?-->", re.DOTALL)
 _PARENT_RE = re.compile(r"<parent>(.*?)</parent>", re.DOTALL)
+_RECORD_HEADER = "# sha256 and path, relative to the module dir, of each input this jar was built from"
 _RELATIVE_PATH_RE = re.compile(r"<relativePath\s*/>|<relativePath>\s*([^<]*?)\s*</relativePath>")
 
 
@@ -48,7 +52,8 @@ def add_source_roots(module_dir: Path) -> list[Path]:
             # An unresolved property would silently resolve to a non-existent dir and
             # scan nothing; skipping is equally wrong but at least not silent-by-design.
             continue
-        path = Path(resolved)
+        # Maven resolves a relative <source> against the module dir, not the current directory.
+        path = module_dir / resolved
         if path.is_dir():
             roots.append(path.resolve())
     return roots
@@ -108,33 +113,74 @@ def record_path(jar: Path) -> Path:
     return jar.with_name(jar.name + ".sources")
 
 
+def _digest(path: Path) -> str:
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
 def write_record(jar: Path, module_dir: Path, srcs: list[Path]) -> None:
-    names = sorted({os.path.relpath(p, module_dir) for p in srcs})
-    record_path(jar).write_text("".join(n + "\n" for n in names))
+    names = {os.path.relpath(p, module_dir): p for p in srcs}
+    lines = [_RECORD_HEADER] + [f"{_digest(names[n])}  {n}" for n in sorted(names)]
+    record_path(jar).write_text("".join(line + "\n" for line in lines))
+
+
+def read_record(jar: Path) -> dict[str, str] | None:
+    """The recorded inputs as {path relative to the module dir: sha256}, or None when there is no
+    usable record: none at all, or one written before records carried digests."""
+    try:
+        lines = record_path(jar).read_text().splitlines()
+    except OSError:
+        return None
+    if not lines or lines[0] != _RECORD_HEADER:
+        return None
+    recorded = {}
+    for line in lines[1:]:
+        digest, sep, name = line.partition("  ")
+        if not sep:
+            return None
+        recorded[name] = digest
+    return recorded
 
 
 def stale_trigger(jar: Path, module_dir: Path, srcs: list[Path]) -> Path | None:
     """The input that makes `jar` stale, or None when it is up to date.
 
-    Returns the jar itself when it is missing, the record when there is none (what the jar was
-    built from is unknown), a recorded input that is gone (a path that does not exist), or the
-    newest input that is newer than the jar or missing from the record.
+    Returns the jar itself when it is missing, the record when there is no usable one (what the
+    jar was built from is unknown), a recorded input that is gone (a path that does not exist),
+    the newest input that is newer than the jar or missing from the record, or else the first
+    input whose content no longer matches its recorded digest. Digests are computed only when
+    nothing cheaper has already made the jar stale.
     """
     try:
         jar_mtime = jar.stat().st_mtime
     except FileNotFoundError:
         return jar
-    record = record_path(jar)
-    try:
-        recorded = set(record.read_text().splitlines())
-    except OSError:
-        return record
+    recorded = read_record(jar)
+    if recorded is None:
+        return record_path(jar)
     names = {p: os.path.relpath(p, module_dir) for p in srcs}
-    removed = sorted(recorded - set(names.values()))
+    removed = sorted(set(recorded) - set(names.values()))
     if removed:
         return module_dir / removed[0]
     newer = [p for p in srcs if p.stat().st_mtime > jar_mtime or names[p] not in recorded]
-    return max(newer, key=lambda p: p.stat().st_mtime) if newer else None
+    if newer:
+        return max(newer, key=lambda p: p.stat().st_mtime)
+    for p in sorted(srcs, key=lambda p: names[p]):
+        if _digest(p) != recorded[names[p]]:
+            return p
+    return None
+
+
+def mtime_hides(trigger: Path, jar: Path) -> bool:
+    """Whether a trigger is an input that exists but is no newer than the jar: its content changed
+    behind an old mtime, which Maven's own staleness check (also by mtime) would not recompile."""
+    try:
+        return trigger.stat().st_mtime <= jar.stat().st_mtime
+    except OSError:
+        return False
 
 
 def is_removed(trigger: Path, module_dir: Path, srcs: list[Path]) -> bool:

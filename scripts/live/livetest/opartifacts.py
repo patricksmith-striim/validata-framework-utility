@@ -360,8 +360,9 @@ def _stale_trigger(jar: Path, module_dir: Path) -> Path | None:
     # Return the input that makes the jar stale (so a rebuild note can name what changed), or None
     # when it is up to date. Rebuild on any change -- otherwise an edit (without `mvn clean`) is
     # silently ignored and the live suite uploads the OLD jar, reporting green over a real
-    # regression. The inputs are what Maven builds the jar from (jarinputs); a deleted input is
-    # seen through the jar's source record, which mtimes cannot do.
+    # regression. The inputs are what Maven builds the jar from (jarinputs); a deleted input, or one
+    # whose bytes changed behind an old mtime, is seen through the jar's source record (each input
+    # with its content digest), which mtimes cannot do.
     return jarinputs.stale_trigger(jar, module_dir, jarinputs.inputs(module_dir))
 
 def _running_java_major(run=None) -> str | None:
@@ -733,6 +734,9 @@ def build_jar(module_ref: str, release: dict, run=None, report=None) -> BuiltArt
                 reason = f"no source record for {jar.name} -> clean rebuild"
             elif jarinputs.is_removed(trigger, module_dir, jarinputs.inputs(module_dir)):
                 reason = f"source removed ({changed} was built into {jar.name}) -> clean rebuild"
+            elif jarinputs.mtime_hides(trigger, jar):
+                reason = (f"source changed ({changed} differs from what {jar.name} was built from, "
+                          f"mtime not newer) -> clean rebuild")
     elif corrupt is not None:
         # The interrupted build that truncated the jar may have left target/classes
         # half-written too, and shade would fold those into a plain `package` -- only

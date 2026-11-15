@@ -133,9 +133,10 @@ def _stale_trigger(jar: Path, module_dir: Path) -> Path | None:
     # would drive the OLD jar, reporting green over a real regression. The inputs are
     # `_sources`: what Maven builds the jar from.
     #
-    # Mtimes cannot see a DELETED source, so the jar's source record (`_source_record`) is
-    # compared too: a missing record, or a recorded path that is gone, returns a path that is not
-    # a current source, which `build_jar` answers with a clean rebuild.
+    # Mtimes cannot see a DELETED source, nor bytes restored with an old mtime, so the jar's source
+    # record (`_source_record`: each input with its content digest) is compared too: a missing
+    # record, a recorded path that is gone, or an input whose digest changed is answered by
+    # `build_jar` with a clean rebuild.
     return jarinputs.stale_trigger(jar, module_dir, _sources(module_dir))
 
 
@@ -507,6 +508,11 @@ def build_jar(module_ref: str, release: dict, run=None, report=None) -> BuiltArt
             # A removed source's class or resource stays in target/classes; only clean drops it.
             clean = True
             reason = f"source removed ({changed} was built into {jar.name}) -> clean rebuild"
+        elif jarinputs.mtime_hides(trigger, jar):
+            # Changed bytes behind an old mtime: Maven's compiler, deciding by mtime, would skip it.
+            clean = True
+            reason = (f"source changed ({changed} differs from what {jar.name} was built from, "
+                      f"mtime not newer) -> clean rebuild")
     elif corrupt is not None:
         # The interrupted build that truncated the jar may have left target/classes
         # half-written too, and shade would fold those into a plain `package` -- only

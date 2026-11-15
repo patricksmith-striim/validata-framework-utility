@@ -143,14 +143,36 @@ def test_parent_poms_follow_the_chain_and_stop_on_a_cycle(project):
     assert jarinputs.parent_poms(project.mod) == [project.parent.resolve(), project.aggregator.resolve()]
 
 
-def test_integration_build_jar_rebuilds_after_a_fieldcommon_edit(project, monkeypatch):
+# The three spellings of an add-source root Maven accepts. A plain relative path is relative to
+# the module dir, never to the directory the run was started from.
+SOURCE_STYLES = {
+    'basedir': lambda p: ('${project.basedir}/../OpenProcessorCommon/src/main/java',
+                          '${project.basedir}/../../FieldCommon/src/main/java'),
+    'relative': lambda p: ('../OpenProcessorCommon/src/main/java', '../../FieldCommon/src/main/java'),
+    'absolute': lambda p: (str(p.common.parents[2]), str(p.field.parents[2])),
+}
+
+
+def _source_style(p, style, monkeypatch):
+    """Rewrite the module pom's add-source roots in `style` and run from outside the module."""
+    common, field = SOURCE_STYLES[style](p)
+    (p.mod / 'pom.xml').write_text(POM.replace(SOURCE_STYLES['basedir'](p)[0], common)
+                                   .replace(SOURCE_STYLES['basedir'](p)[1], field))
+    os.utime(p.mod / 'pom.xml', (OLD, OLD))
+    monkeypatch.chdir(p.root.parent)
+
+
+@pytest.mark.parametrize('style', SOURCE_STYLES)
+@pytest.mark.parametrize('edited', ['common', 'field'])
+def test_integration_build_jar_rebuilds_after_a_shared_root_edit(project, monkeypatch, style, edited):
     engine = _engine('inttest')
+    _source_style(project, style, monkeypatch)
     monkeypatch.setattr(engine.opjarrelease, 'configured_versions', lambda *a, **k: set())
     monkeypatch.setattr(engine, 'resolve_build_java_home', lambda *a, **k: None)
     monkeypatch.setattr(engine, '_verify_striim_home', lambda *a, **k: None)
     monkeypatch.setattr(engine, '_assert_jar_java_version', lambda *a, **k: None)
     _built(engine, project)
-    _edit(project.field)
+    _edit(getattr(project, edited))
     ran = []
 
     def mvn(argv, cwd, env):
@@ -163,8 +185,10 @@ def test_integration_build_jar_rebuilds_after_a_fieldcommon_edit(project, monkey
     assert built.origin == 'built' and ran and ran[0][0] == 'mvn'
 
 
-def test_live_build_jar_clean_rebuilds_after_a_source_is_deleted(project, monkeypatch):
+@pytest.mark.parametrize('style', SOURCE_STYLES)
+def test_live_build_jar_clean_rebuilds_after_a_source_is_deleted(project, monkeypatch, style):
     engine = _engine('livetest')
+    _source_style(project, style, monkeypatch)
     monkeypatch.setattr(engine.opjarrelease, 'configured_versions', lambda *a, **k: set())
     monkeypatch.setattr(engine, 'resolve_build_java_home', lambda *a, **k: None)
     monkeypatch.setattr(engine, '_verify_striim_home', lambda *a, **k: None)
@@ -189,3 +213,53 @@ def test_live_build_jar_clean_rebuilds_after_a_source_is_deleted(project, monkey
 def test_input_set_helper_is_identical_between_engines():
     assert (SCRIPTS / 'live/livetest/jarinputs.py').read_bytes() == (
         SCRIPTS / 'integration/inttest/jarinputs.py').read_bytes()
+
+
+def _hermetic_build_jar(engine, project, monkeypatch):
+    """build_jar with the environment probes stubbed out; returns (built, mvn argvs, reasons)."""
+    for probe in ('_verify_striim_home', '_require_platform_home', '_assert_jar_java_version',
+                  'resolve_build_java_home'):
+        if hasattr(engine, probe):
+            monkeypatch.setattr(engine, probe, lambda *a, **k: None)
+    monkeypatch.setattr(engine.opjarrelease, 'configured_versions', lambda *a, **k: set())
+    ran, reasons = [], []
+
+    def mvn(argv, cwd, env):
+        ran.append(argv)
+        os.utime(project.jar, (EDIT_TIME + 1, EDIT_TIME + 1))
+        return types.SimpleNamespace(returncode=0, stdout='', stderr='')
+
+    release = {'STRIIM_SERIES': '5.4', 'STRIIM_VERSION': '5.4.2', 'JAVA_RELEASE': '17'}
+    built = engine.build_jar('java/OpenProcessors/MyOp', release, run=mvn, report=reasons.append)
+    return built, ran, reasons
+
+
+@pytest.mark.parametrize('name', ENGINES)
+@pytest.mark.parametrize('edited', ['own', 'field'])
+@pytest.mark.parametrize('mtime', [OLD, OLD - 100], ids=['same-mtime', 'older-mtime'])
+def test_changed_bytes_restored_with_an_old_mtime_clean_rebuild(project, monkeypatch, name, edited, mtime):
+    # A checkout, archive extract or copy that preserves timestamps can change an input's bytes
+    # without making it newer than the jar. Maven's compiler decides by mtime too, so only a
+    # clean build recompiles it.
+    engine = _engine(name)
+    _built(engine, project)
+    path = getattr(project, edited)
+    path.write_text('// v2: behaviour changed\n')
+    os.utime(path, (mtime, mtime))
+    assert _same(engine._stale_trigger(project.jar, project.mod), path)
+    built, ran, reasons = _hermetic_build_jar(engine, project, monkeypatch)
+    assert built.origin == 'built' and 'clean' in ran[0]
+    assert 'clean rebuild' in reasons[0]
+    assert engine._stale_trigger(project.jar, project.mod) is None     # the new record holds
+
+
+@pytest.mark.parametrize('name', ENGINES)
+def test_a_record_of_names_only_is_a_rebuild_trigger(project, name):
+    # A record written before it carried content digests cannot vouch for the jar's bytes.
+    engine = _engine(name)
+    jarinputs = importlib.import_module(name + '.jarinputs')
+    srcs = jarinputs.inputs(project.mod)
+    engine._source_record(project.jar).write_text(
+        ''.join(n + '\n' for n in sorted({os.path.relpath(p, project.mod) for p in srcs})))
+    os.utime(project.jar, (JAR_TIME, JAR_TIME))
+    assert engine._stale_trigger(project.jar, project.mod) == engine._source_record(project.jar)
