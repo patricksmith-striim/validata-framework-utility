@@ -182,7 +182,7 @@ def test_integration_build_jar_rebuilds_after_a_shared_root_edit(project, monkey
 
     release = {'STRIIM_SERIES': '5.4', 'STRIIM_VERSION': '5.4.2', 'JAVA_RELEASE': '17'}
     built = engine.build_jar('java/OpenProcessors/MyOp', release, run=mvn)
-    assert built.origin == 'built' and ran and ran[0][0] == 'mvn'
+    assert built.origin == 'built' and ran and ran[0][0] == 'mvn' and 'clean' in ran[0]
 
 
 @pytest.mark.parametrize('style', SOURCE_STYLES)
@@ -215,8 +215,9 @@ def test_input_set_helper_is_identical_between_engines():
         SCRIPTS / 'integration/inttest/jarinputs.py').read_bytes()
 
 
-def _hermetic_build_jar(engine, project, monkeypatch):
-    """build_jar with the environment probes stubbed out; returns (built, mvn argvs, reasons)."""
+def _hermetic_build_jar(engine, project, monkeypatch, package=None):
+    """build_jar with the environment probes stubbed out; returns (built, mvn argvs, reasons).
+    `package`, if given, is called with each Maven argv to model what that build writes."""
     for probe in ('_verify_striim_home', '_require_platform_home', '_assert_jar_java_version',
                   'resolve_build_java_home'):
         if hasattr(engine, probe):
@@ -226,6 +227,8 @@ def _hermetic_build_jar(engine, project, monkeypatch):
 
     def mvn(argv, cwd, env):
         ran.append(argv)
+        if package:
+            package(argv)
         os.utime(project.jar, (EDIT_TIME + 1, EDIT_TIME + 1))
         return types.SimpleNamespace(returncode=0, stdout='', stderr='')
 
@@ -251,6 +254,44 @@ def test_changed_bytes_restored_with_an_old_mtime_clean_rebuild(project, monkeyp
     assert built.origin == 'built' and 'clean' in ran[0]
     assert 'clean rebuild' in reasons[0]
     assert engine._stale_trigger(project.jar, project.mod) is None     # the new record holds
+
+
+MIXED_EDITS = {
+    # (changed behind its old mtime, changed normally so it is newer than the jar)
+    'java-and-resource': ('src/main/java/m/MyOp.java', 'src/main/resources/settings.properties'),
+    'resource-and-resource': ('src/main/resources/a.txt', 'src/main/resources/b.txt'),
+}
+
+
+@pytest.mark.parametrize('name', ENGINES)
+@pytest.mark.parametrize('mixed', MIXED_EDITS)
+def test_a_newer_input_does_not_mask_a_change_behind_an_old_mtime(project, monkeypatch, name, mixed):
+    # Maven recompiles and recopies only what is newer than its previous output, so a build
+    # without `clean` keeps the old output of the input whose bytes changed behind an old mtime,
+    # even though the other, newer input makes the jar stale. The record written after the
+    # build would then vouch for a jar holding the old bytes.
+    engine = _engine(name)
+    hidden, newer = (project.mod / rel for rel in MIXED_EDITS[mixed])
+    for f in (hidden, newer):
+        f.parent.mkdir(parents=True, exist_ok=True)
+        f.write_text('v1\n')
+        os.utime(f, (OLD, OLD))
+    _built(engine, project)
+    output = {hidden: 'v1\n', newer: 'v1\n'}     # what target/classes and the jar hold
+
+    def package(argv):
+        for f in output:
+            if 'clean' in argv or f.stat().st_mtime > JAR_TIME:
+                output[f] = f.read_text()
+
+    hidden.write_text('v2\n')
+    os.utime(hidden, (OLD, OLD))
+    _edit(newer)
+    built, ran, reasons = _hermetic_build_jar(engine, project, monkeypatch, package)
+    assert built.origin == 'built' and len(ran) == 1 and 'clean' in ran[0]
+    assert 'clean rebuild' in reasons[0]
+    assert output == {hidden: 'v2\n', newer: newer.read_text()}, 'the jar kept stale bytes'
+    assert engine._stale_trigger(project.jar, project.mod) is None     # and the record says so
 
 
 @pytest.mark.parametrize('name', ENGINES)

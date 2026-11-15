@@ -494,23 +494,24 @@ def build_jar(module_ref: str, release: dict, run=None, report=None) -> BuiltArt
         trigger = _stale_trigger(jar, module_dir)
         if trigger is None:
             return BuiltArtifact(path=jar, name=jar.name, op_name=op_name_for(jar.name, suffix), origin="reused")
-        clean = False   # a source edit in the same environment -> incremental rebuild
+        # Any stale input forces `mvn clean`, as in the live engine. The trigger is only the
+        # FIRST reason found: another input may have changed behind an old mtime (a checkout,
+        # an archive extract, a timestamp-preserving copy), and Maven, recompiling and
+        # recopying by mtime, would keep its old output in an incremental `package` -- which
+        # the source record written after the build would then vouch for. A removed source's
+        # class or resource likewise stays in target/classes until a clean.
+        clean = True
         try:
             changed = trigger.relative_to(module_dir)
         except ValueError:
             changed = trigger
-        reason = f"source changed ({changed} is newer than {jar.name}) -> incremental rebuild"
+        reason = f"source changed ({changed} is newer than {jar.name}) -> clean rebuild"
         if trigger == _source_record(jar):
             # Built by an older framework or by hand: what it was built from is unknown.
-            clean = True
             reason = f"no source record for {jar.name} -> clean rebuild"
         elif jarinputs.is_removed(trigger, module_dir, _sources(module_dir)):
-            # A removed source's class or resource stays in target/classes; only clean drops it.
-            clean = True
             reason = f"source removed ({changed} was built into {jar.name}) -> clean rebuild"
         elif jarinputs.mtime_hides(trigger, jar):
-            # Changed bytes behind an old mtime: Maven's compiler, deciding by mtime, would skip it.
-            clean = True
             reason = (f"source changed ({changed} differs from what {jar.name} was built from, "
                       f"mtime not newer) -> clean rebuild")
     elif corrupt is not None:
@@ -546,7 +547,7 @@ def build_jar(module_ref: str, release: dict, run=None, report=None) -> BuiltArt
             build_env["JAVA_HOME"] = java_home
     # -DskipTests (not -Dmaven.test.skip): COMPILE the test sources at the release's Java level
     # so a Java-16+ construct slipping into a test is caught here, but do NOT RUN the suites.
-    # `clean` is prepended only when a prior different-release build must be discarded (above).
+    # `clean` is prepended whenever target/ holds output that cannot be trusted (above).
     # Announce the automatic (re)build and the trigger that caused it, so a long silent `mvn`
     # step isn't a silent surprise.
     notify(reason)
@@ -556,20 +557,6 @@ def build_jar(module_ref: str, release: dict, run=None, report=None) -> BuiltArt
         out = (getattr(r, "stderr", "") or getattr(r, "stdout", "") or "")[-800:]
         raise OpBuildFailed(f"mvn package failed in {module_dir}:\n{out}")
     existing = _release_jar_candidates(module_dir, suffix)
-    if len(existing) != 1 and not clean:
-        # An INCREMENTAL build can itself create the ambiguity the branch above only
-        # catches on the NEXT run: a version bump changes the pom's finalName, so
-        # `mvn package` writes the new jar BESIDE the old one instead of replacing it,
-        # and the run that performed the bump-rebuild then dies here. Retrying with
-        # `clean` -- which empties target/ -- resolves it in the SAME run, so a version
-        # bump costs one extra build rather than one failed run plus a manual retry.
-        notify(f"ambiguous *-{suffix}.jar after incremental build "
-               f"({', '.join(p.name for p in existing)}) -> clean rebuild")
-        r = run(["mvn", "-q", "clean", "package", "-DskipTests=true"], str(module_dir), build_env)
-        if getattr(r, "returncode", 1) != 0:
-            out = (getattr(r, "stderr", "") or getattr(r, "stdout", "") or "")[-800:]
-            raise OpBuildFailed(f"mvn clean package failed in {module_dir}:\n{out}")
-        existing = _release_jar_candidates(module_dir, suffix)
     if len(existing) != 1:
         raise OpBuildFailed(
             f"build succeeded but no unambiguous *-{suffix}.jar found in "
