@@ -24,6 +24,7 @@ LIVE = Path(__file__).resolve().parents[1] / "livetest"
 INTEG = Path(__file__).resolve().parents[2] / "integration" / "inttest"
 
 # (file, enclosing function): builds whose output streams to the terminal, watched and stoppable by the user.
+# Only the download and the image build may call it (test_only_the_download_and_the_image_build_use_...).
 STREAMING_BUILDS = {("livetest/striim_provision.py", "_stream")}
 
 
@@ -216,3 +217,86 @@ def _waits_at_most(fn, seconds=10):
     t.join(seconds)
     assert not t.is_alive(), f"still waiting for the lock after {seconds}s"
     return box
+
+
+# ---------------------------------------------------------------- the cluster's compose up and down
+
+def _cluster_boundary(monkeypatch, code=0):
+    """Replace only the process boundary under cluster_up/cluster_down: whichever of `subprocess.run` or the
+    bounded stream the call reaches, record its argv, cwd and bound and answer with exit status ``code``."""
+    from livetest import striim_provision as sp
+    calls = []
+
+    def fake_run(argv, *a, **k):
+        calls.append({"argv": list(argv), "cwd": k.get("cwd"), "timeout": k.get("timeout")})
+        return subprocess.CompletedProcess(argv, code, "", "")
+
+    def fake_stream(argv, on_line, *, timeout, env=None, cwd=None):
+        calls.append({"argv": list(argv), "cwd": cwd, "timeout": timeout})
+        on_line("Container slt-striim  Started\n")
+        return code
+    monkeypatch.setattr(sp.subprocess, "run", fake_run)
+    monkeypatch.setattr(sp.dockercmd, "stream", fake_stream)
+    monkeypatch.delenv("STRIIM_HOME", raising=False)
+    monkeypatch.delenv("SLT_ENABLE_NODE_FAULTS", raising=False)
+    from livetest import tryout
+    monkeypatch.setattr(tryout, "configured", lambda: [])
+    return sp, calls
+
+
+def test_the_cluster_compose_up_is_bounded(monkeypatch, tmp_path):
+    sp, calls = _cluster_boundary(monkeypatch)
+    sp.cluster_up(tmp_path, {"STRIIM_VERSION": "5.4.0.6"})
+    assert len(calls) == 1 and calls[0]["timeout"] == dockercmd.COMPOSE_UP_TIMEOUT_S
+    assert calls[0]["argv"][:2] == ["docker", "compose"] and "up" in calls[0]["argv"]
+    assert calls[0]["cwd"] == str(tmp_path)
+
+
+def test_the_cluster_compose_down_is_bounded(monkeypatch, tmp_path):
+    sp, calls = _cluster_boundary(monkeypatch)
+    sp.cluster_down(tmp_path, {"STRIIM_VERSION": "5.4.0.6"})
+    assert len(calls) == 1 and calls[0]["timeout"] == dockercmd.COMPOSE_DOWN_TIMEOUT_S
+    assert calls[0]["argv"][:2] == ["docker", "compose"] and "down" in calls[0]["argv"]
+    assert calls[0]["cwd"] == str(tmp_path)
+
+
+@pytest.mark.parametrize("step,bound", [("cluster_up", "10800s"), ("cluster_down", "600s")])
+def test_a_cluster_compose_call_that_outlives_its_bound_raises_naming_it(monkeypatch, tmp_path, step, bound):
+    # A RuntimeError, like a failed compose: bring-up reports "could not provision", teardown records a failure.
+    sp, _ = _cluster_boundary(monkeypatch, code=dockercmd.TIMED_OUT)
+    with pytest.raises(RuntimeError, match=f"did not finish within {bound} and was stopped"):
+        getattr(sp, step)(tmp_path, {"STRIIM_VERSION": "5.4.0.6"})
+
+
+def test_a_failed_cluster_compose_call_still_raises_its_status(monkeypatch, tmp_path):
+    sp, _ = _cluster_boundary(monkeypatch, code=1)
+    with pytest.raises(RuntimeError, match=r"command failed \(1\): docker compose"):
+        sp.cluster_down(tmp_path, {"STRIIM_VERSION": "5.4.0.6"})
+
+
+def test_only_the_download_and_the_image_build_use_the_unbounded_stream():
+    # The allow-list exempts `_stream` by name, so a lifecycle call routed through it would be hidden.
+    tree = ast.parse((LIVE / "striim_provision.py").read_text())
+    users = set()
+    for fn in ast.walk(tree):
+        if isinstance(fn, ast.FunctionDef) and fn.name != "_stream":
+            if any(isinstance(n, ast.Name) and n.id == "_stream" for n in ast.walk(fn)):
+                users.add(fn.name)
+    assert users == {"ensure_deps", "ensure_image"}
+
+
+def test_a_streamed_command_runs_in_the_given_directory(tmp_path):
+    lines = []
+    code = dockercmd.stream([sys.executable, "-c", "import os; print(os.getcwd())"], lines.append, timeout=30,
+                            cwd=str(tmp_path))
+    assert code == 0 and lines == [f"{tmp_path}\n"]
+
+
+def test_a_hung_cluster_compose_call_and_its_children_are_stopped_at_the_bound(monkeypatch, tmp_path, capsys):
+    # The real bounded runner, with a command that never finishes and leaves a child holding the pipe.
+    from livetest import striim_provision as sp
+    started = time.monotonic()
+    with pytest.raises(RuntimeError, match="did not finish within 1s"):
+        sp._bounded_stream([sys.executable, "-c", _GRANDCHILD], cwd=str(tmp_path), timeout=1.0)
+    assert time.monotonic() - started < 20
+    assert "Container x Starting" in capsys.readouterr().out      # the output still reaches the terminal

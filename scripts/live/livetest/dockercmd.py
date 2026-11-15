@@ -6,7 +6,8 @@ that outlives it is stopped and answers like a failed one (exit status ``TIMED_O
 so), so every caller's existing failure path reports it.
 
 Builds whose output streams to the terminal (``striim_provision._stream``: the installer download, the
-Striim image build) are the one exception: the user watches them progress and can stop them.
+Striim image build) are the one exception: the user watches them progress and can stop them. The cluster's
+own `compose up`/`down` stream too, but through ``stream`` below, under the compose bounds.
 """
 from __future__ import annotations
 
@@ -80,13 +81,13 @@ def _kill_group(proc) -> None:
         pass
 
 
-def stream(argv, on_line, *, timeout: float, env=None) -> int:
+def stream(argv, on_line, *, timeout: float, env=None, cwd=None) -> int:
     """Run ``argv`` with stdout and stderr merged, handing each line to ``on_line``; return its exit status,
     or ``TIMED_OUT`` when it outlived ``timeout``. The command runs in its own process group, killed whole on
     expiry and on any exception (Ctrl-C included): `docker compose` runs as a child of `docker`, and either
-    can hold the output pipe open."""
+    can hold the output pipe open. ``cwd`` is the directory it runs in (None: this process's)."""
     proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
-                            env=env, start_new_session=True)
+                            env=env, cwd=cwd, start_new_session=True)
     fired = threading.Event()
 
     def expire():

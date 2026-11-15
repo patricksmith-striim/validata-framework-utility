@@ -6,6 +6,7 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -389,10 +390,24 @@ def _gate_striim_deps(striim_dir: Path, version: str) -> None:
             "consumer-supplied installer-input manifest")
 
 def _stream(argv, cwd=None):
-    # inherit stdout/stderr so download/build progress shows live
+    # The installer download and the image build only: inherit stdout/stderr so their progress shows
+    # live, unbounded (the user watches them and can stop them). Cluster up/down use _bounded_stream.
     r = subprocess.run(argv, cwd=cwd)
     if r.returncode != 0:
         raise RuntimeError(f"command failed ({r.returncode}): {' '.join(argv)}")
+
+def _bounded_stream(argv, cwd=None, *, timeout):
+    """The cluster's `docker compose up`/`down`: output still reaches the terminal as it comes, but the
+    command and its children are stopped at ``timeout``, which raises like a failed command (bring-up
+    reports it as a failed provision, teardown records a teardown failure)."""
+    def echo(line):
+        sys.stdout.write(line)
+        sys.stdout.flush()
+    code = dockercmd.stream(argv, echo, timeout=timeout, cwd=cwd)
+    if code == dockercmd.TIMED_OUT:
+        raise RuntimeError(dockercmd.timed_out_message(argv, timeout))
+    if code != 0:
+        raise RuntimeError(f"command failed ({code}): {' '.join(argv)}")
 
 @contextlib.contextmanager
 def _env_override(extra: dict):
@@ -773,7 +788,7 @@ def compose_files(striim_dir: Path) -> list[Path]:
 def cluster_up(striim_dir: Path, release: dict | None = None, run=None, progress=None,
                query_run=None) -> None:
     if progress: progress("cluster", "starting containers")
-    run = run or _stream
+    run = run or (lambda argv, cwd=None: _bounded_stream(argv, cwd, timeout=dockercmd.COMPOSE_UP_TIMEOUT_S))
     version = (release or {}).get("STRIIM_VERSION", _DEFAULT_STRIIM_VERSION)
     # Fill the cluster/license config from the STRIIM_HOME install (conf/startUp.properties)
     # so a bare live run "just works" without the operator exporting
@@ -841,7 +856,7 @@ def cluster_has_containers(striim_dir: Path, release: dict | None = None) -> boo
     return bool(r.stdout.strip())
 
 def cluster_down(striim_dir: Path, release: dict | None = None, run=None) -> None:
-    run = run or _stream
+    run = run or (lambda argv, cwd=None: _bounded_stream(argv, cwd, timeout=dockercmd.COMPOSE_DOWN_TIMEOUT_S))
     version = (release or {}).get("STRIIM_VERSION", _DEFAULT_STRIIM_VERSION)
     with _env_override({"STRIIM_VERSION": version}):
         # -v so teardown removes volumes (full reset semantics).
