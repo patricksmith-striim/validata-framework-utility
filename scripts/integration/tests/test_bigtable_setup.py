@@ -5,6 +5,7 @@ manifest rules, the token rendering and the create/drop bookkeeping are tested.
 """
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -138,3 +139,39 @@ def test_teardown_reports_a_failed_drop_and_does_not_raise(monkeypatch, capsys):
 def test_teardown_with_nothing_created_is_a_no_op():
     item = SimpleNamespace()
     IntYamlItem._teardown_bigtable(item)
+
+
+def _requires_bigtable(tmp_path):
+    return load_manifest(_write(tmp_path, BASE + "setup:\n  bigtable:\n    - table: emp\n      families: {emp: null}\n"))
+
+
+def test_export_sets_the_emulator_variable_for_a_bigtable_case(tmp_path, monkeypatch):
+    monkeypatch.delenv("BIGTABLE_EMULATOR_HOST", raising=False)
+    item = SimpleNamespace()
+    IntYamlItem._export_bigtable_emulator(item, _requires_bigtable(tmp_path),
+                                          {"BIGTABLE_HOST": "localhost", "BIGTABLE_GRPC_PORT": "19470"})
+    assert os.environ["BIGTABLE_EMULATOR_HOST"] == "localhost:19470"
+    assert item._bigtable_env_set is True
+    monkeypatch.delenv("BIGTABLE_EMULATOR_HOST", raising=False)
+
+
+def test_export_keeps_a_value_the_operator_set(tmp_path, monkeypatch):
+    monkeypatch.setenv("BIGTABLE_EMULATOR_HOST", "elsewhere:9999")
+    item = SimpleNamespace()
+    IntYamlItem._export_bigtable_emulator(item, _requires_bigtable(tmp_path),
+                                          {"BIGTABLE_HOST": "localhost", "BIGTABLE_GRPC_PORT": "19470"})
+    assert os.environ["BIGTABLE_EMULATOR_HOST"] == "elsewhere:9999"
+    assert not hasattr(item, "_bigtable_env_set")
+
+
+def test_export_does_nothing_for_a_case_without_bigtable(tmp_path, monkeypatch):
+    monkeypatch.delenv("BIGTABLE_EMULATOR_HOST", raising=False)
+    m = load_manifest(_write(tmp_path, "name: plain\nop:\n  jar: java/OpenProcessors/JdbcSink\nrequires: [postgres]\n"))
+    IntYamlItem._export_bigtable_emulator(SimpleNamespace(), m, {})
+    assert "BIGTABLE_EMULATOR_HOST" not in os.environ
+
+
+def test_export_fails_the_case_when_the_tokens_are_missing(tmp_path, monkeypatch):
+    monkeypatch.delenv("BIGTABLE_EMULATOR_HOST", raising=False)
+    with pytest.raises(pytest.fail.Exception, match="BIGTABLE_HOST"):
+        IntYamlItem._export_bigtable_emulator(SimpleNamespace(), _requires_bigtable(tmp_path), {})

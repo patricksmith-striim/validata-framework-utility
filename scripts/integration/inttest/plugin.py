@@ -1884,6 +1884,7 @@ class IntYamlItem(pytest.Item):
                 _ensure_gcs_bucket(tok)
 
             # --- 5. setup: bigtable tables, then DDL, then seed, each against its own route. ---
+            self._export_bigtable_emulator(m, tok)
             self._setup_bigtable(m, tok)
             for spec in m.ddl:
                 try:
@@ -2546,6 +2547,21 @@ class IntYamlItem(pytest.Item):
                     # path there is none, and the rows are the whole of the evidence.
                     + (f"\n  writer report: {json.dumps(report)}" if report is not None else ""))
 
+    def _export_bigtable_emulator(self, m, tok) -> None:
+        """BIGTABLE_EMULATOR_HOST for the driver JVM, for a case that requires bigtable: the Bigtable client
+        reaches the emulator only through this variable (design §3), and the driver inherits the process
+        environment, as the Spanner emulator's does. setdefault: a value the operator set is kept. Removed
+        again at teardown (`_teardown_db_isolation`), so it does not reach a later test."""
+        if "bigtable" not in (m.requires or []):
+            return
+        host = tok.get("BIGTABLE_HOST")
+        port = tok.get("BIGTABLE_GRPC_PORT")
+        if not host or not port:
+            pytest.fail(f"{m.name}: requires bigtable but the run's BIGTABLE_HOST/BIGTABLE_GRPC_PORT tokens are missing")
+        if "BIGTABLE_EMULATOR_HOST" not in os.environ:
+            os.environ["BIGTABLE_EMULATOR_HOST"] = f"{host}:{port}"
+            self._bigtable_env_set = True
+
     def _setup_bigtable(self, m, tok) -> None:
         """`setup: bigtable:` -- create each declared table (families, GC rules, seed rows) through
         its route's admin before the writer starts. Each is remembered, so teardown drops it, even
@@ -2588,6 +2604,9 @@ class IntYamlItem(pytest.Item):
             return
         if getattr(self, "_bigtable_created", None):
             self._teardown_bigtable()
+        if getattr(self, "_bigtable_env_set", False):
+            os.environ.pop("BIGTABLE_EMULATOR_HOST", None)
+            self._bigtable_env_set = False
         if self._pg_admin is not None:
             # Wipe this test's own Postgres data NOW rather than deferring to the
             # NEXT test's setup-time reset -- a passing test with no keep-flag
