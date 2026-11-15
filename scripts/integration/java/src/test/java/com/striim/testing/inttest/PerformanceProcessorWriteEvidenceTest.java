@@ -5,6 +5,9 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
@@ -139,6 +142,171 @@ class PerformanceProcessorWriteEvidenceTest {
         assertTrue(result.errorMessage.contains("publishMonitorEvents blew up"), result.errorMessage);
     }
 
+    // --- PROCESSED is cumulative: only its rise across the measured window is that window's ------
+
+    /**
+     * Publishes a cumulative PROCESSED, as AbstractWriterApp does, adding what it accepted at each
+     * of its first {@code countedFlushes} flushes. Records the order of its calls.
+     */
+    private static class ProcessedWriter extends FakeWriter {
+        private final int countedFlushes;
+        private final List<String> calls = new ArrayList<>();
+        private long pending;
+        private long processedCount;
+        private int flushes;
+
+        ProcessedWriter(boolean acknowledges, boolean acksAnything, int countedFlushes) {
+            super(acknowledges, acksAnything, null);
+            this.countedFlushes = countedFlushes;
+        }
+
+        @Override
+        public List<WAEvent> processEvent(Event event) {
+            calls.add("process");
+            pending++;
+            return super.processEvent(event);
+        }
+
+        @Override
+        public void endOfWindow() {
+            calls.add("flush");
+            super.endOfWindow();
+            if (flushes++ < countedFlushes) {
+                processedCount += pending;
+            }
+            pending = 0;
+        }
+
+        @Override
+        public String publishedProcessed() {
+            calls.add("read");
+            return Long.toString(processedCount);
+        }
+    }
+
+    @Test
+    void processedWrittenOnlyDuringWarmupIsNotTheMeasuredWindowsEvidence() throws Exception {
+        // 2 warmup replays x 2 records are written and counted at the warmup's flush; the measured
+        // window's 6 events are accepted, flushed without error, and neither written nor acked.
+        PerformanceProcessor.PerfResult result = new PerformanceProcessor.PerfResult();
+        Exception failure = PerformanceProcessor.runWarmupAndMeasured(request(2, 3), TWO_RECORDS,
+                new ProcessedWriter(false, false, 1), result);
+
+        assertNull(failure);
+        assertEquals(6, result.measuredInputEvents);
+        assertNull(result.measuredAckedEvents);
+        assertEquals("4", result.publishedProcessed, "the cumulative value, warmup included");
+        assertEquals(0L, result.measuredProcessed, "nothing was written in the measured window");
+        // The result file carries it: the Python runner rejects measuredProcessed 0.
+        assertTrue(new ObjectMapper().writeValueAsString(result).contains("\"measuredProcessed\":0"));
+    }
+
+    @Test
+    void aWriterThatAcksDiscardedMeasuredEventsShowsNoProcessedRise() {
+        PerformanceProcessor.PerfResult result = new PerformanceProcessor.PerfResult();
+        PerformanceProcessor.runWarmupAndMeasured(request(2, 3), TWO_RECORDS,
+                new ProcessedWriter(true, true, 1), result);
+
+        assertEquals(6L, result.measuredAckedEvents);
+        assertEquals(0L, result.measuredProcessed);
+    }
+
+    @Test
+    void anOrdinaryWriterReportsTheWindowsOwnProcessedRise() {
+        PerformanceProcessor.PerfResult result = new PerformanceProcessor.PerfResult();
+        Exception failure = PerformanceProcessor.runWarmupAndMeasured(request(2, 3), TWO_RECORDS,
+                new ProcessedWriter(true, true, Integer.MAX_VALUE), result);
+
+        assertNull(failure);
+        assertEquals(6L, result.measuredAckedEvents);
+        assertEquals("10", result.publishedProcessed);
+        assertEquals(6L, result.measuredProcessed, "4 warmup rows are not the window's");
+    }
+
+    @Test
+    void processedIsReadAfterTheWarmupFlushBeforeTheWindowAndAfterItsFlush() {
+        ProcessedWriter writer = new ProcessedWriter(false, false, Integer.MAX_VALUE);
+        PerformanceProcessor.runWarmupAndMeasured(request(1, 1), TWO_RECORDS, writer, new PerformanceProcessor.PerfResult());
+
+        assertEquals(List.of("process", "process", "flush", "read", "process", "process", "flush", "read"),
+                writer.calls);
+    }
+
+    @Test
+    void aWriterThatPublishesNoProcessedReportsNoProcessedRise() {
+        PerformanceProcessor.PerfResult result = new PerformanceProcessor.PerfResult();
+        Exception failure = PerformanceProcessor.runWarmupAndMeasured(request(1, 2), TWO_RECORDS,
+                new FakeWriter(true, true, null), result);
+
+        assertNull(failure);
+        assertNull(result.measuredProcessed, "the acknowledgment count is the evidence");
+        assertEquals(4L, result.measuredAckedEvents);
+    }
+
+    @Test
+    void processedFirstPublishedAfterTheWindowRisesFromZero() {
+        PerformanceProcessor.PerfResult result = new PerformanceProcessor.PerfResult();
+        Exception failure = PerformanceProcessor.runWarmupAndMeasured(request(0, 2), TWO_RECORDS,
+                new FakeWriter(false, false, null) {
+                    private int reads;
+
+                    @Override
+                    public String publishedProcessed() {
+                        return reads++ == 0 ? null : "4";
+                    }
+                }, result);
+
+        assertNull(failure);
+        assertEquals(4L, result.measuredProcessed);
+    }
+
+    @Test
+    void aProcessedReadBeforeTheWindowThatThrowsFailsTheIterationUnmeasured() {
+        ProcessedWriter writer = new ProcessedWriter(false, false, Integer.MAX_VALUE) {
+            @Override
+            public String publishedProcessed() {
+                throw new IllegalStateException("publishMonitorEvents blew up early");
+            }
+        };
+        PerformanceProcessor.PerfResult result = new PerformanceProcessor.PerfResult();
+        Exception failure = PerformanceProcessor.runWarmupAndMeasured(request(1, 2), TWO_RECORDS, writer, result);
+
+        assertNotNull(failure);
+        assertTrue(result.errorMessage.contains("publishMonitorEvents blew up early"), result.errorMessage);
+        assertEquals(0, result.measuredInputEvents, "the window did not run");
+        assertEquals(List.of("process", "process", "flush"), writer.calls);
+    }
+
+    @Test
+    void aProcessedValueThatIsNotANumberFailsTheIteration() {
+        PerformanceProcessor.PerfResult result = new PerformanceProcessor.PerfResult();
+        Exception failure = PerformanceProcessor.runWarmupAndMeasured(request(1, 2), TWO_RECORDS,
+                new FakeWriter(false, false, "1,024"), result);
+
+        assertNotNull(failure);
+        assertTrue(result.errorMessage.contains("PROCESSED"), result.errorMessage);
+        assertTrue(result.errorMessage.contains("1,024"), result.errorMessage);
+        assertNull(result.measuredProcessed);
+    }
+
+    @Test
+    void processedThatDisappearsAfterTheWindowFailsTheIteration() {
+        PerformanceProcessor.PerfResult result = new PerformanceProcessor.PerfResult();
+        Exception failure = PerformanceProcessor.runWarmupAndMeasured(request(1, 2), TWO_RECORDS,
+                new FakeWriter(false, false, null) {
+                    private int reads;
+
+                    @Override
+                    public String publishedProcessed() {
+                        return reads++ == 0 ? "4" : null;
+                    }
+                }, result);
+
+        assertNotNull(failure);
+        assertTrue(result.errorMessage.contains("PROCESSED"), result.errorMessage);
+        assertNull(result.measuredProcessed);
+    }
+
     @Test
     void aProcessorReportsNoWriterEvidence() {
         PerformanceProcessor.PerfResult result = new PerformanceProcessor.PerfResult();
@@ -146,5 +314,6 @@ class PerformanceProcessorWriteEvidenceTest {
 
         assertNull(result.measuredAckedEvents);
         assertNull(result.publishedProcessed);
+        assertNull(result.measuredProcessed);
     }
 }

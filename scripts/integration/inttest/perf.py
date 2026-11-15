@@ -746,21 +746,30 @@ def _read_result(text: str) -> dict:
 def _target_evidence_gap(perf_result: dict, measured_input: int) -> str | None:
     """Why a target iteration's result shows no write, or None. "Accepted and flushed without
     throwing" is all the other checks prove for a writer: one whose table mapping matched
-    nothing, or that dropped every event, reported a throughput and passed."""
+    nothing, or that dropped every event, reported a throughput and passed.
+
+    PROCESSED is cumulative, so the window's evidence is `measuredProcessed`, its rise from a read
+    after the warmup's flush to one after the window's; `publishedProcessed` counts warmup writes
+    too. The acknowledgment count is the evidence only for a writer that publishes no PROCESSED."""
     # Missing keys fail rather than default, like `perReplayOutputEventsStable`: a harness that
     # predates the fields must not pass every target iteration unchecked.
-    for key in ("measuredAckedEvents", "publishedProcessed"):
+    for key in ("measuredAckedEvents", "publishedProcessed", "measuredProcessed"):
         if key not in perf_result:
             return f"result is missing required field {key!r} for a target case"
     acked = perf_result["measuredAckedEvents"]
     processed = perf_result["publishedProcessed"]
+    rise = perf_result["measuredProcessed"]
     if acked is not None and acked <= 0:
         return (f"the writer acknowledged none of the {measured_input} events of the measured "
                 f"window: nothing shows that anything was written")
-    if processed is not None and str(processed).strip() == "0":
-        return (f"the writer published PROCESSED 0 after a measured window of {measured_input} "
-                f"events: nothing shows that anything was written")
-    if acked is None and processed is None:
+    if rise is not None and rise <= 0:
+        return (f"the writer's PROCESSED rose by {rise} across a measured window of "
+                f"{measured_input} events (published {processed} after it): nothing shows that "
+                f"the window wrote anything")
+    if rise is None and processed is not None:
+        return (f"the writer published PROCESSED {processed} but the result has no "
+                f"measuredProcessed for the window: its rise across the window is unknown")
+    if acked is None and rise is None:
         return ("no evidence that the writer wrote anything: it does not acknowledge events (no "
                 "Acknowledgeable marker) and publishes no PROCESSED count")
     return None
@@ -785,7 +794,7 @@ def check_correctness(perf_result: dict, events_in_file: int, run_size: int, cor
 
     `target` (a `target:` case) adds the writer-evidence check: a writer emits nothing, so a
     non-empty window must show that it wrote something -- acknowledged events, and a published
-    PROCESSED that is not 0 -- or the iteration fails."""
+    PROCESSED that rose across the window -- or the iteration fails."""
     if returncode != 0:
         # ⚠ WITH THE SUBPROCESS'S OWN LAST WORDS. This used to report the exit code ALONE, so a
         # JVM that failed to start, threw in init, or could not reach the database all looked

@@ -1210,27 +1210,78 @@ def _check_target(result):
 
 
 def test_a_target_iteration_that_acked_its_events_passes():
-    assert _check_target(_target_result(measuredAckedEvents=20, publishedProcessed="40")).passed
+    assert _check_target(_target_result(measuredAckedEvents=20, publishedProcessed="40",
+                                        measuredProcessed=20)).passed
 
 
 def test_a_target_iteration_that_acked_nothing_fails():
-    outcome = _check_target(_target_result(measuredAckedEvents=0, publishedProcessed=None))
+    outcome = _check_target(_target_result(measuredAckedEvents=0, publishedProcessed=None,
+                                           measuredProcessed=None))
     assert not outcome.passed and "acknowledged none of the 20" in outcome.reason
 
 
 def test_a_target_iteration_whose_writer_published_processed_zero_fails():
-    outcome = _check_target(_target_result(measuredAckedEvents=20, publishedProcessed="0"))
+    outcome = _check_target(_target_result(measuredAckedEvents=20, publishedProcessed="0",
+                                           measuredProcessed=0))
     assert not outcome.passed and "PROCESSED" in outcome.reason
 
 
 def test_a_target_iteration_with_neither_acks_nor_processed_fails():
-    outcome = _check_target(_target_result(measuredAckedEvents=None, publishedProcessed=None))
+    outcome = _check_target(_target_result(measuredAckedEvents=None, publishedProcessed=None,
+                                           measuredProcessed=None))
     assert not outcome.passed and "no evidence" in outcome.reason
 
 
 def test_a_target_result_without_the_evidence_fields_fails():
     outcome = _check_target(_target_result())
     assert not outcome.passed and "measuredAckedEvents" in outcome.reason
+
+
+# PROCESSED is cumulative (AbstractWriterApp adds at each commit and publishes the total), so a
+# writer that wrote during warmup publishes a positive value after a measured window that wrote
+# nothing. Only its rise across the window, `measuredProcessed`, is the window's evidence.
+
+def test_a_target_iteration_whose_processed_came_only_from_warmup_fails():
+    # The shape PerformanceProcessorWriteEvidenceTest pins for a writer that wrote its 20 warmup
+    # events and none of the measured window's 20.
+    outcome = _check_target(_target_result(warmupInputEvents=20,
+                                           measuredAckedEvents=None, publishedProcessed="20",
+                                           measuredProcessed=0))
+    assert not outcome.passed
+    assert "PROCESSED rose by 0" in outcome.reason
+
+
+def test_a_target_iteration_that_acked_discarded_events_but_processed_nothing_fails():
+    outcome = _check_target(_target_result(measuredAckedEvents=20, publishedProcessed="20",
+                                           measuredProcessed=0))
+    assert not outcome.passed and "PROCESSED rose by 0" in outcome.reason
+
+
+def test_a_target_iteration_whose_processed_fell_fails():
+    outcome = _check_target(_target_result(measuredAckedEvents=None, publishedProcessed="3",
+                                           measuredProcessed=-17))
+    assert not outcome.passed and "PROCESSED rose by -17" in outcome.reason
+
+
+def test_a_target_iteration_without_processed_falls_back_to_its_acks():
+    assert _check_target(_target_result(measuredAckedEvents=20, publishedProcessed=None,
+                                        measuredProcessed=None)).passed
+
+
+def test_a_target_iteration_whose_processed_rose_passes_without_acks():
+    assert _check_target(_target_result(measuredAckedEvents=None, publishedProcessed="40",
+                                        measuredProcessed=20)).passed
+
+
+def test_a_target_result_with_processed_but_no_measured_rise_fails():
+    outcome = _check_target(_target_result(measuredAckedEvents=20, publishedProcessed="40",
+                                           measuredProcessed=None))
+    assert not outcome.passed and "measuredProcessed" in outcome.reason
+
+
+def test_a_target_result_without_the_measured_processed_field_fails():
+    outcome = _check_target(_target_result(measuredAckedEvents=20, publishedProcessed="40"))
+    assert not outcome.passed and "measuredProcessed" in outcome.reason
 
 
 def test_a_non_target_iteration_needs_no_writer_evidence():
@@ -1262,7 +1313,7 @@ def test_run_measured_iteration_holds_a_target_case_to_the_evidence_check(tmp_pa
     )
     preflight_result = perf.preflight(performance)
     nothing_written = dict(_CANNED_RESULT, measuredOutputEvents=0, comparedReplayOutputEvents=0,
-                           measuredAckedEvents=0, publishedProcessed="0")
+                           measuredAckedEvents=0, publishedProcessed="0", measuredProcessed=0)
     fake_java = _write_fake_java(tmp_path, sleep_seconds=0.05, result=nothing_written)
 
     result = perf.run_measured_iteration(
