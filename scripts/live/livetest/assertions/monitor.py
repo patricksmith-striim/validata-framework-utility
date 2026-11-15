@@ -46,7 +46,8 @@ def parse_monitor_specs(raw: list) -> list[dict]:
     match, so a case can pin `individualOperationCount: {Insert: 5}` without naming every op).
     A mapping with a `min` or `max` key is a bound, and one with a matcher key a matcher, at any
     depth. Strings and patterns may carry ${...} tokens, rendered when the tier runs. A spec with
-    {absent: true} needs a positive figure (see _positive) beside it."""
+    {absent: true} needs a positive figure (see _positive) beside it; a figure written as a token
+    passes here and is checked again once rendered."""
     if not isinstance(raw, list) or not raw:
         raise MonitorSpecError("'assert.monitor' must be a non-empty list of specs")
     for spec in raw:
@@ -72,13 +73,9 @@ def parse_monitor_specs(raw: list) -> list[dict]:
                     f"'assert.monitor' metric {name!r}: expected a number, a string or a "
                     f"mapping, got {value!r}")
             _check_bounds(name, value)
-        absent = next((n for n, v in metrics.items() if _has_absent(v)), None)
-        if absent is not None and not any(_positive(v) for v in metrics.values()):
-            raise MonitorSpecError(
-                f"'assert.monitor' metric {absent!r}: 'absent' needs a positive figure in the same "
-                f"spec (a count above zero, a {{min}} above zero, a string, {{present: true}} or "
-                f"{{matches}}), which shows the component has published what the absent figure "
-                f"is checked against; on its own a misspelt name passes for ever")
+        unanchored = _unanchored_absent(metrics)
+        if unanchored:
+            raise MonitorSpecError(unanchored)
         if "target" in spec and (not isinstance(spec["target"], str) or not spec["target"]):
             raise MonitorSpecError("monitor spec 'target' must be a non-empty component name")
         if "component" in spec:
@@ -145,6 +142,22 @@ def _check_bounds(name, value):
             f"got {value!r}")
     if "min" in value and "max" in value and value["min"] > value["max"]:
         raise MonitorSpecError(f"'assert.monitor' metric {name!r}: min > max in {value!r}")
+
+
+def _unanchored_absent(metrics: dict) -> str | None:
+    """Why a spec's `absent` figure has nothing to be checked against, or None."""
+    absent = next((n for n, v in metrics.items() if _has_absent(v)), None)
+    if absent is None or any(_positive(v) for v in metrics.values()):
+        return None
+    return (f"'assert.monitor' metric {absent!r}: 'absent' needs a positive figure in the same "
+            f"spec (a count above zero, a {{min}} above zero, a string, {{present: true}} or "
+            f"{{matches}}), which shows the component has published what the absent figure "
+            f"is checked against; on its own a misspelt name passes for ever")
+
+
+def _holds(spec: dict) -> bool:
+    """Whether a rendered spec has no positive figure, so its first match proves nothing."""
+    return not any(_positive(v) for v in spec["metrics"].values())
 
 
 def _has_absent(want) -> bool:
@@ -352,6 +365,14 @@ def _check_bounds_all(spec: dict) -> None:
             raise AssertionFailed(f"monitor: {e}", []) from None
 
 
+def _rendered_away(raw: dict, rendered: dict) -> str | None:
+    """Why `absent` lost its positive figure in rendering (a token that renders to zero), or None.
+    A spec that had none before rendering was parse_monitor_specs' to refuse."""
+    if _unanchored_absent(raw["metrics"]):
+        return None
+    return _unanchored_absent(rendered["metrics"])
+
+
 def _recaptured(client, spec: dict, app: str, tokens: dict):
     """Re-read every `recapture:` value, then render the spec against them: (spec, None), or
     (None, why) when a value is not shown this poll."""
@@ -369,6 +390,9 @@ def _recaptured(client, spec: dict, app: str, tokens: dict):
                           f"for {cap['field']!r}")
         tokens[cap["token"]] = value
     rendered = render_spec(spec, tokens)
+    unanchored = _rendered_away(spec, rendered)
+    if unanchored:            # a recaptured value can be zero on one read and not the next
+        return None, unanchored
     _check_bounds_all(rendered)
     return rendered, None
 
@@ -379,15 +403,22 @@ def assert_monitor(client, app: str, specs: list[dict], timeout: int, poll: floa
     values on every poll, just before its MON read, and is rendered against that read: a value
     that keeps moving on a running app (a checkpoint advanced by idle heartbeats) is compared with
     its current reading, not with one taken once and outrun. A spec with no positive figure is
-    then re-read until `timeout`, and fails as soon as it stops matching."""
+    then re-read until `timeout`, and fails as soon as it stops matching. Which specs hold is
+    decided from the rendered spec each read evaluates, so a token that renders to zero holds
+    like a written zero."""
     local = dict(tokens or {})
     fixed = {}
     for i, s in enumerate(specs):
         if not s.get("recapture"):
             fixed[i] = render_spec(s, tokens)
             _check_bounds_all(fixed[i])
+            unanchored = _rendered_away(s, fixed[i])
+            if unanchored:
+                raise AssertionFailed(f"monitor: {unanchored}", [])
     resolved: dict[int, str] = {}
     shown_specs = list(specs)
+    # Read by poll_holding on every poll; a recaptured spec's entry follows its latest rendering.
+    holds = [_holds(fixed[i]) if i in fixed else True for i in range(len(specs))]
 
     def evaluate(indices):
         results = []
@@ -401,6 +432,7 @@ def assert_monitor(client, app: str, specs: list[dict], timeout: int, poll: floa
                     results.append((False, why, empty, empty))
                     continue
             shown_specs[i] = spec
+            holds[i] = _holds(spec)
             if i not in resolved:
                 if spec.get("component"):
                     resolved[i] = resolve_component(
@@ -411,7 +443,6 @@ def assert_monitor(client, app: str, specs: list[dict], timeout: int, poll: floa
             results.append(_evaluate(client.mon(resolved[i]), spec))
         return results
 
-    holds = [not any(_positive(v) for v in s["metrics"].values()) for s in specs]
     results, outcome = poll_holding(evaluate, holds, timeout, poll, status_probe, progress)
     records = [
         build_assertion_result(type="monitor", status="passed" if ok else "failed",

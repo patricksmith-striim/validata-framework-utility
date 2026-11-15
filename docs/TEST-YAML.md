@@ -2342,7 +2342,9 @@ above zero, a string, `present` or `matches`), refused at load otherwise: it sho
 has published, and on its own a misspelt name would pass for ever. A spec with no positive
 figure (only `max` bounds, zeros and absences) already matches before anything has happened, so
 once every spec matches it is read again until `timeout`, and fails as soon as it stops
-matching; set `timeout` to the window it must hold for. Strings, patterns and component names are
+matching; set `timeout` to the window it must hold for. Both rules apply to the rendered values:
+a token that renders to `0` is a zero, holds like one, and is no positive figure beside `absent`
+(refused when the tier runs; a recaptured one is a miss on that poll). Strings, patterns and component names are
 token-rendered when the tier runs, so they can carry a token captured earlier; inside `matches` a
 token's value is regex-escaped, so `"^\\^ ${RESTART}$"` matches that position literally. A matcher is a
 mapping with exactly one of these keys; a pattern is compiled at load unless it carries a token.

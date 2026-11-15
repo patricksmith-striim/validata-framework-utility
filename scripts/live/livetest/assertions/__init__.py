@@ -63,6 +63,8 @@ def poll_holding(evaluate, holds, timeout, poll, status_probe=None, progress=Non
     A spec whose ``holds[i]`` is true asserts only upper bounds, zeros or absences, which the
     first read can satisfy before anything has happened. Once every spec matches, those specs
     alone are read again until the deadline, and a read on which one misses ends the poll.
+    ``holds`` is read on every poll, so ``evaluate`` may update an entry once it knows what the
+    spec expects (a spec rendered from a value re-read each poll).
     Returns ``(results, outcome)``: ``"passed"``, ``"expired"`` (a spec never matched) or
     ``"broke"`` (a held spec matched, then missed)."""
     import time

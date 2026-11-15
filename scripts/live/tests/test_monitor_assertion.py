@@ -438,3 +438,79 @@ def test_a_holding_spec_rereads_only_itself_after_the_positive_specs_pass():
                              timeout=0.2, poll=0.02)
     assert [r["status"] for r in records] == ["passed", "passed"]
     assert fake.read.count("NS.Src") == 1 and fake.read.count("NS.Tgt") > 2
+
+
+# ---- holding is decided from the rendered expectation, not the ${...} text -------------
+
+class Scripted:
+    """`describe(Src)` shows `base` as the figure `Base`; `mon(Src)` returns `bodies` one per
+    read (the last one repeats)."""
+
+    def __init__(self, bodies, base="0"):
+        self.bodies, self.base, self.polls = list(bodies), base, 0
+
+    def describe(self, name):
+        return [{"Base": self.base}]
+
+    def mon(self, name):
+        if name == "NS.App":
+            return {"entityType": "APPLICATION", "fullName": name,
+                    "components": [{"entityType": "SOURCE", "fullName": "NS.Src"}]}
+        self.polls += 1
+        return self.bodies.pop(0) if len(self.bodies) > 1 else self.bodies[0]
+
+
+BASE = [{"token": "BASE", "describe": "Src", "field": "Base"}]
+
+
+@pytest.mark.parametrize("want", [0, "0", "${ZERO}"])
+def test_a_zero_from_a_token_holds_like_a_literal_zero(want):
+    fake = Scripted([{"discardedEventCount": "0"}, {"discardedEventCount": "7"}])
+    with pytest.raises(AssertionFailed, match="matched, then stopped matching"):
+        assert_monitor(fake, "NS.App", parse_monitor_specs(
+            [{"component": "Src", "metrics": {"discardedEventCount": want}}]),
+            timeout=30, poll=0, tokens={"ZERO": "0"})
+    assert fake.polls == 2
+
+
+def test_a_recaptured_zero_holds():
+    fake = Scripted([{"discardedEventCount": "0"}, {"discardedEventCount": "7"}], base="0")
+    with pytest.raises(AssertionFailed, match="matched, then stopped matching"):
+        assert_monitor(fake, "NS.App", parse_monitor_specs(
+            [{"component": "Src", "recapture": BASE,
+              "metrics": {"discardedEventCount": "${BASE}"}}]), timeout=30, poll=0, tokens={})
+    assert fake.polls == 2
+
+
+def test_a_positive_value_from_a_token_still_passes_on_its_first_match():
+    fake = Scripted([{"input": "5"}], base="5")
+    records = assert_monitor(fake, "NS.App", parse_monitor_specs(
+        [{"component": "Src", "metrics": {"input": "${FIVE}"}}]),
+        timeout=30, poll=0, tokens={"FIVE": "5"})
+    assert records[0]["status"] == "passed" and fake.polls == 1
+    fake = Scripted([{"input": "5"}], base="5")
+    records = assert_monitor(fake, "NS.App", parse_monitor_specs(
+        [{"component": "Src", "recapture": BASE, "metrics": {"input": "${BASE}"}}]),
+        timeout=30, poll=0, tokens={})
+    assert records[0]["status"] == "passed" and fake.polls == 1
+
+
+def test_a_token_companion_that_renders_to_zero_does_not_anchor_absent():
+    fake = Scripted([{"input": "0"}])
+    with pytest.raises(AssertionFailed, match="'absent' needs a positive figure"):
+        assert_monitor(fake, "NS.App", parse_monitor_specs(
+            [{"component": "Src", "metrics": {"input": "${N}", "gone": {"absent": True}}}]),
+            timeout=30, poll=0, tokens={"N": "0"})
+    records = assert_monitor(Scripted([{"input": "3"}]), "NS.App", parse_monitor_specs(
+        [{"component": "Src", "metrics": {"input": "${N}", "gone": {"absent": True}}}]),
+        timeout=30, poll=0, tokens={"N": "3"})
+    assert records[0]["status"] == "passed"
+
+
+def test_a_recaptured_companion_that_renders_to_zero_never_passes():
+    fake = Scripted([{"input": "0"}], base="0")
+    with pytest.raises(AssertionFailed, match="'absent' needs a positive figure"):
+        assert_monitor(fake, "NS.App", parse_monitor_specs(
+            [{"component": "Src", "recapture": BASE,
+              "metrics": {"input": "${BASE}", "gone": {"absent": True}}}]),
+            timeout=0.1, poll=0.02, tokens={})
