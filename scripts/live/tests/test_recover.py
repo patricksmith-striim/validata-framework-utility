@@ -647,6 +647,35 @@ def test_stop_cycle_fails_and_records_a_stop_that_did_not_stop_the_app(left_in, 
     assert r["status"] == "failed" and r["actual"]["rows"][0]["status"] == left_in
 
 
+def _utc(value):
+    from datetime import datetime, timezone
+    parsed = datetime.fromisoformat(value)
+    assert parsed.utcoffset() is not None and parsed.utcoffset().total_seconds() == 0
+    assert abs((datetime.now(timezone.utc) - parsed).total_seconds()) < 60
+    return parsed
+
+
+def test_stop_cycle_records_utc_twins_of_its_monotonic_times():
+    # The monotonic issuedAt/settledAt mean nothing outside this process; the UTC twins are what
+    # lines the cycle up with server logs and other evidence.
+    recs = []
+    c = StubClient(statuses=["RUNNING", "STOPPING", "DEPLOYED"])
+    recovery.stop_cycle(c, "NS.App", cycle=1, timeout=5, record=recs.append, poll=0)
+    row = recs[0]["actual"]["rows"][0]
+    assert isinstance(row["issuedAt"], float) and isinstance(row["settledAt"], float)
+    assert _utc(row["issuedUtc"]) <= _utc(row["settledUtc"])
+
+
+def test_a_failed_stop_cycle_records_when_it_issued_and_no_settled_time():
+    recs = []
+    c = StubClient(statuses=["CRASH"])
+    with pytest.raises(RecoveryError):
+        recovery.stop_cycle(c, "NS.App", cycle=1, timeout=0, record=recs.append, poll=0)
+    row = recs[0]["actual"]["rows"][0]
+    _utc(row["issuedUtc"])
+    assert row["settledAt"] is None and row["settledUtc"] is None
+
+
 def test_verify_timeout_is_half_the_manifest_timeout_floored_at_two_minutes():
     assert recovery.verify_timeout(60) == 120.0
     assert recovery.verify_timeout(600) == 300.0

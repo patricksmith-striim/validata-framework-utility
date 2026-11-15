@@ -180,14 +180,20 @@ def stop_cycle(client, app: str, *, cycle: int, timeout: float, record, poll: fl
     happened left the app RUNNING, the START was a no-op, and the case passed as an undisturbed
     run. Waiting here also keeps the START from being sent while the app is still STOPPING.
     """
+    from datetime import datetime, timezone
     from livetest.resultschema import build_assertion_result
-    row = {"cycle": cycle, "status": None, "issuedAt": None, "settledAt": None}
+    # issuedAt/settledAt are monotonic, for durations; the *Utc twins, stamped at the same moment,
+    # are what lines a cycle up with server logs and other evidence. Null until reached.
+    row = {"cycle": cycle, "status": None, "issuedAt": None, "issuedUtc": None,
+           "settledAt": None, "settledUtc": None}
     ok, detail = False, "ok"
     try:
         row["issuedAt"] = time.monotonic()
+        row["issuedUtc"] = datetime.now(timezone.utc).isoformat()
         client.stop_app(app)
         row["status"] = await_interrupted(client, app, "stop", timeout, poll=poll, report=report)
         row["settledAt"] = time.monotonic()
+        row["settledUtc"] = datetime.now(timezone.utc).isoformat()
         ok = True
         return row["status"]
     except InterruptionNotSettled as e:
