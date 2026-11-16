@@ -765,9 +765,11 @@ def test_opt_in_service_warns_until_opted_in(tmp_path, monkeypatch):
     for opted in ({"SLT_EMULATORS": "1"}, {"SLT_EMU": "1"}):
         c, = services({"emu": ["s1"]}, opted)
         assert c.line() == "[ ok ] service emu: Docker (slt-emu) at localhost:9010"
-    for off in ({"SLT_EMULATORS": "0"}, {"SLT_EMU": "false"}):     # set, but off: still opt-in
+    for off in ({"SLT_EMULATORS": "0"}, {"SLT_EMU": "0"}):         # set, but off: still opt-in
         c, = services({"emu": ["s1"]}, off)
         assert c.line().startswith("[warn] service emu: opt-in:")
+    c, = services({"emu": ["s1"]}, {"SLT_EMU": "false"})            # neither 1 nor 0: refused
+    assert c.status == doctor.FAIL and "SLT_EMU='false'" in c.line()
 
 
 def test_absent_directory_mount_is_a_warning_and_a_file_like_one_a_failure(tmp_path, monkeypatch):
@@ -1165,3 +1167,27 @@ def test_doctor_runs_the_tryout_check(proj):
                                 "SLT_STRIIM_TRYOUT_JARS": "Platform.jar"}, REPO, probe=AUTH_OK)
     (bad,) = [c for c in checks if c.subject == "tryout"]
     assert bad.status == "FAIL" and doctor.exit_code(checks) == CONFIG
+
+
+# --- switches -------------------------------------------------------------------------------
+
+def test_switches_set_to_1_or_0_pass(tmp_path):
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    assert doctor.check_switches({"SLT_PROJECT_ROOT": str(proj), "SLT_RUN_DISABLED": "0",
+                                  "SLT_KEEP_RESOURCES": "1"}) == []
+
+
+def test_a_switch_set_to_anything_else_is_a_settings_mistake(tmp_path):
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    (proj / ".env").write_text("SLT_KEEP_SERVICES=yes\n")
+    checks = doctor.check_switches({"SLT_PROJECT_ROOT": str(proj), "SLT_RUN_DISABLED": "true"})
+    assert [c.code for c in checks] == [CONFIG, CONFIG]
+    text = " ".join(c.line() for c in checks)
+    assert "SLT_RUN_DISABLED='true'" in text and "SLT_KEEP_SERVICES='yes'" in text
+
+
+def test_a_bad_switch_reads_as_off_in_the_checks_that_depend_on_it():
+    assert doctor._switch("SLT_ENABLE_NODE_FAULTS", {"SLT_ENABLE_NODE_FAULTS": "true"}) is False
+    assert doctor._switch("SLT_ENABLE_NODE_FAULTS", {"SLT_ENABLE_NODE_FAULTS": "1"}) is True

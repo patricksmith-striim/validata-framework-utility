@@ -94,6 +94,9 @@ Database tokens resolve to the host Striim reaches a service by: `localhost` for
 Server settings are `STRIIM_*`; framework settings are `SLT_*` (integration: `INT_*`).
 [SETTINGS.md](../SETTINGS.md) lists every one, where it can be set and its default.
 
+A `=1` below is a switch: `1` is on, `0` or unset is off, and any other value stops the run with
+exit 2 (`livetest.paths.flag`, shared with the integration engine).
+
 | Variable | Purpose |
 |---|---|
 | `STRIIM_URL`, `STRIIM_USER`, `STRIIM_PASS` (alias `STRIIM_PASSWORD`) | the Striim to test. Default `http://localhost:9080`, `admin`; the Docker cluster's password is `striim` |

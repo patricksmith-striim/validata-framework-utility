@@ -56,7 +56,7 @@ def test_sample_17_names_its_gating_setting_where_the_prerequisites_are_listed()
     m = yaml.safe_load(_doc("samples/live/17-one-node-failover/test.yaml"))
     assert m["recover"]["node"]
     plugin = _doc("scripts/live/livetest/plugin.py")
-    assert 'os.environ.get("SLT_ENABLE_NODE_FAULTS") != "1"' in plugin
+    assert 'not paths.flag("SLT_ENABLE_NODE_FAULTS")' in plugin
     sample = _flat("samples/live/17-one-node-failover/README.md")
     assert "does not require port 9082" in sample
     for rel in ("README.md", "docs/RUN-YOUR-FIRST-TEST.md"):

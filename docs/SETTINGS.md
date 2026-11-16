@@ -16,6 +16,8 @@ Highest first: your shell's environment, then `.env` in your project root (`SLT_
 
 Start from your repository's `.env.example`. `striim-test doctor` lists the settings that are set and where each came from.
 
+**Switches.** A setting described below as `` `1`: ... `` or `` `0`: ... ``, `SLT_ENABLE_NODE_FAULTS` and a service's `opt_in_env` are switches: `1` is on and `0` is off. Unset is off, except `SLT_PRE_UP` and `INT_VARIANT_ITEMS`, which are on. Any other value, `true` and `yes` included, is a settings mistake: the run stops with exit 2 before any test, and `striim-test doctor` names it.
+
 ## Striim
 
 | Setting | Where | Default | What it does |

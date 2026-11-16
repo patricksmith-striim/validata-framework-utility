@@ -195,6 +195,15 @@ the last release; the release makes it that version's entry.
   skipped the integration session lock and the session-end teardown, but cases still started
   their services, and a serial session's `${TID}` stayed empty, so two sessions wrote the same
   tables. The setting is no longer read. Use `INT_STACK_PREFIX` for a second stack.
+- **Switches are `1` or `0`, and nothing else.** Every on/off setting in both engines and the CLI
+  (`SLT_KEEP_SERVICES`, `SLT_KEEP_RESOURCES`, `SLT_SKIP_VERIFY`, `SLT_PARALLEL`,
+  `SLT_RUN_DISABLED`, `INT_ALLOW_ALL_SKIPPED`, a service's `opt_in_env` and the rest that
+  docs/SETTINGS.md lists) is on at `1` and off at `0` or unset (`SLT_PRE_UP` and
+  `INT_VARIANT_ITEMS` stay on when unset). Any other value, `true` and `yes` included, stops the run
+  with exit 2 before any test, and `striim-test doctor` names it. Before, most switches were on
+  for any non-empty value, so `SLT_SKIP_VERIFY=0` skipped every assertion and
+  `INT_ALLOW_CONCURRENT_SESSIONS=0` dropped the session lock, and `SLT_RUN_DISABLED=0` ran
+  disabled live cases while the integration tier skipped them.
 
 - **`livetest.cli stop` refuses while another live run uses the stack.** A stop is `down -v`
   (databases, volumes, the Striim MDR). It now exits 2 while another live session is registered

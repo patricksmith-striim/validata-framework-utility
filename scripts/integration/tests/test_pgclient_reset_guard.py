@@ -61,9 +61,10 @@ def test_reset_schemas_runs_on_the_sandbox_database(monkeypatch):
     assert [kw.get("dbname") for kw in opened] == ["intdb"]
 
 
-@pytest.mark.parametrize("value, allowed", [("1", True), ("0", False), ("true", False), ("yes", False),
-                                            (" 1", False), ("", False)])
+@pytest.mark.parametrize("value, allowed", [("1", True), ("0", False), ("true", None), ("yes", None),
+                                            (" 1", None), ("", False)])
 def test_the_destructive_reset_opt_in_is_exactly_one(monkeypatch, value, allowed):
+    """None: not a switch value at all, refused as a settings mistake (paths.flag)."""
     monkeypatch.setenv(_ENV, value)
     sent, opened = [], []
     admin = _admin("shared", sent, opened)
@@ -71,7 +72,7 @@ def test_the_destructive_reset_opt_in_is_exactly_one(monkeypatch, value, allowed
         admin.reset_schemas()
         assert [s for s in sent if s.startswith("DROP SCHEMA")] == _DROPS
     else:
-        with pytest.raises(UnsafeResetError):
+        with pytest.raises(UnsafeResetError if allowed is False else ValueError, match=None if allowed is False else _ENV):
             admin.reset_schemas()
         assert opened == [] and sent == []
 

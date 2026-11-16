@@ -66,10 +66,10 @@ SERVICE_JARS = {"teradata": (TERADATA_JDBC_JAR, TERADATA_JDBC_ENV)}
 
 def teradata_jdbc_opted_in(env=None) -> bool:
     """SLT_TERADATA_JDBC=1 in ``env``, or by default the environment then ``.env``."""
-    if env is not None:
-        return (env.get(TERADATA_JDBC_ENV) or "").strip() == "1"
     from livetest import paths
-    return (paths.setting(TERADATA_JDBC_ENV) or "").strip() == "1"
+    if env is not None:
+        return paths.flag(TERADATA_JDBC_ENV, env)
+    return paths.parse_flag(TERADATA_JDBC_ENV, paths.setting(TERADATA_JDBC_ENV))
 
 
 class StriimDepsError(Exception):
@@ -906,8 +906,9 @@ def ensure_image(striim_dir: Path, release: dict | None = None, run=None, progre
 # Bigtable tests self-provisioning like GCS/Kafka. They stay out of the base compose so a plain
 # `docker compose up` still targets real Spanner and Bigtable.
 def _compose_files():
+    from livetest import paths
     files = list(_COMPOSE_FILES)
-    if os.environ.get("SLT_ENABLE_NODE_FAULTS") == "1":
+    if paths.flag("SLT_ENABLE_NODE_FAULTS"):
         files += ["-f", "compose.node-fault.yaml"]
     if _debug_enabled():
         files += ["-f", DEBUG_COMPOSE_FILE]

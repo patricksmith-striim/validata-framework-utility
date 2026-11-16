@@ -97,7 +97,7 @@ def _parallel(env: dict) -> bool:
     register-once) must engage in BOTH — Phase 2 keyed them on the xdist worker var alone, which
     the console's separate-subprocess model does not set. Serial (neither var) is unchanged; the
     xdist worker case is unchanged (the var is still present)."""
-    return bool(env.get("PYTEST_XDIST_WORKER") or env.get("SLT_PARALLEL"))
+    return bool(env.get("PYTEST_XDIST_WORKER") or paths_mod.flag("SLT_PARALLEL", env))
 
 
 def _slug(name: str) -> str:
@@ -249,7 +249,7 @@ def _require_service_opt_in(name: str) -> None:
     JVM-global on the cluster and affects non-Spanner tests too), so a test that
     `requires` one stays opt-in rather than provisioning unconditionally."""
     gate = _load_service_yaml(name).get("opt_in_env")
-    if gate and not (os.environ.get(gate) or os.environ.get("INT_EMULATORS")):
+    if gate and not (paths_mod.flag(gate) or paths_mod.flag("INT_EMULATORS")):
         pytest.skip(f"set {gate}=1 (or INT_EMULATORS=1) to opt in to the {name!r} service")
 
 
@@ -456,7 +456,7 @@ def _acquire_session_lock(config) -> None:
         return
     if os.environ.get("PYTEST_XDIST_WORKER"):
         return                      # a worker shares the controller's session
-    if os.environ.get("INT_ALLOW_CONCURRENT_SESSIONS"):
+    if paths_mod.flag("INT_ALLOW_CONCURRENT_SESSIONS"):
         return
     lock = FileLock(str(_session_lock_path()), timeout=0)
     try:
@@ -608,7 +608,7 @@ def _int_all_skipped_guard(session, exitstatus):
             print(f"[integration]   {r.nodeid}: {why}")
         return 1 if exitstatus == 0 else exitstatus
     causes = {r._int_env_skip for r in blocked}
-    if os.environ.get("INT_ALLOW_ALL_SKIPPED") and "build" not in causes:
+    if paths_mod.flag("INT_ALLOW_ALL_SKIPPED") and "build" not in causes:
         return exitstatus
     first = blocked[0]
     reason = first.longrepr[2] if isinstance(first.longrepr, tuple) else str(first.longrepr)
@@ -647,7 +647,7 @@ def pytest_sessionfinish(session, exitstatus):
     # INT_EMPTY_SELECTION_OK=1: a `-m` that deselected every item is not a failure (a runner's
     # marker-split pass that this selection happens to leave empty).
     if (session.exitstatus == pytest.ExitCode.NO_TESTS_COLLECTED
-            and os.environ.get("INT_EMPTY_SELECTION_OK") == "1"
+            and paths_mod.flag("INT_EMPTY_SELECTION_OK")
             and session.config.getoption("markexpr", "")):
         session.exitstatus = pytest.ExitCode.OK
     if os.environ.get("PYTEST_XDIST_WORKER"):
@@ -662,7 +662,7 @@ def pytest_sessionfinish(session, exitstatus):
             # Another checkout may be using a service this session started.
             if started:
                 print(f"[integration] left running (SLT_INFRA_OWNERSHIP=shared): {', '.join(sorted(started))}")
-        elif not os.environ.get("INT_KEEP_SERVICES"):
+        elif not paths_mod.flag("INT_KEEP_SERVICES"):
             failed = set()
             for name in sorted(started):
                 try:
@@ -934,7 +934,7 @@ def _keep_resources(request) -> bool:
         return True  # keep on failure, for debugging
     if request.config.getoption("--slt-keep-resources", False):
         return True
-    if os.environ.get("INT_KEEP_RESOURCES"):
+    if paths_mod.flag("INT_KEEP_RESOURCES"):
         return True
     return False
 
@@ -1219,10 +1219,7 @@ def _group_requires(m, group_services: set) -> list:
 def _variant_items(env) -> bool:
     """`INT_VARIANT_ITEMS`: unset or `1`, a variants case is one item per variant group; `0`, one
     item for the whole case, its groups driven in turn or by `INT_VARIANT_WORKERS`."""
-    raw = (env.get("INT_VARIANT_ITEMS") or "1").strip()
-    if raw not in ("0", "1"):
-        raise ValueError(f"INT_VARIANT_ITEMS must be 0 or 1, got {raw!r}")
-    return raw == "1"
+    return paths_mod.flag("INT_VARIANT_ITEMS", env)
 
 
 def _group_items(m) -> list:
@@ -1450,6 +1447,11 @@ def pytest_configure(config):
     per-test objects are tokenized (${TID}/${TID_ORACLE}) so parallel runs are
     supported, but stay opt-in."""
     os.environ.update(paths_mod.effective_env(os.environ))
+    # A switch set to anything but 1 or 0 is a settings mistake: refuse the run before anything
+    # reads it (paths.flag).
+    problems = paths_mod.flag_problems(os.environ)
+    if problems:
+        raise pytest.UsageError("integration: " + "\n".join(problems))
     config.addinivalue_line("markers", "integration: integration test (requires Docker services)")
     config.addinivalue_line("markers", "postgres: requires the Postgres integration service")
     config.addinivalue_line("markers", "oracle: requires the Oracle integration service")
@@ -1471,7 +1473,7 @@ def pytest_configure(config):
                 "pytest-xdist (-n/--dist) is not allowed under --perf, even with "
                 "SLT_PARALLEL=1."
             )
-        if not os.environ.get("SLT_PARALLEL"):
+        if not paths_mod.flag("SLT_PARALLEL"):
             raise pytest.UsageError(
                 "the integration-test suite runs SERIALLY by default. Per-test object "
                 "names are tokenized (${TID}/${TID_ORACLE}) so parallel runs are "
@@ -1500,7 +1502,7 @@ def pytest_configure(config):
     # does that routinely). Unconditional serial runs never touch this registry at
     # all (the parallel branch is the only caller of ensure_provisioned_once), so
     # this is a no-op there beyond deleting a file that likely doesn't exist.
-    if os.environ.get("SLT_PARALLEL") and not os.environ.get("PYTEST_XDIST_WORKER"):
+    if paths_mod.flag("SLT_PARALLEL") and not os.environ.get("PYTEST_XDIST_WORKER"):
         if _docker_mod is not None:
             _docker_mod.clear_provision_registry()
     _install_case_records(config)
@@ -1870,7 +1872,7 @@ class IntYamlItem(pytest.Item):
 
         # --- 1. Skip gate: disabled: truthy skips before any provisioning/build work,
         # unless forced via SLT_RUN_DISABLED=1. ---
-        if m.disabled and os.environ.get("SLT_RUN_DISABLED") != "1":
+        if m.disabled and not paths_mod.flag("SLT_RUN_DISABLED"):
             reason = m.disabled if isinstance(m.disabled, str) else "disabled"
             pytest.skip(f"{m.name}: disabled ({reason}); set SLT_RUN_DISABLED=1 to force")
 
@@ -2714,7 +2716,7 @@ class IntYamlItem(pytest.Item):
         keep = (
             failed
             or self.config.getoption("--slt-keep-resources", False)
-            or bool(os.environ.get("INT_KEEP_RESOURCES"))
+            or paths_mod.flag("INT_KEEP_RESOURCES")
         )
         if getattr(self, "_bigtable_env_set", False):
             os.environ.pop("BIGTABLE_EMULATOR_HOST", None)
@@ -2948,7 +2950,7 @@ class PerfYamlItem(pytest.Item):
         # --- 1. Skip gate: disabled: truthy skips before any provisioning/build work,
         # same as IntYamlItem step 1 -- this perf test.yaml's own `disabled:` key
         # (PERF_SPEC.md §3: structurally identical to a regression test.yaml). ---
-        if m.disabled and os.environ.get("SLT_RUN_DISABLED") != "1":
+        if m.disabled and not paths_mod.flag("SLT_RUN_DISABLED"):
             reason = m.disabled if isinstance(m.disabled, str) else "disabled"
             pytest.skip(f"{m.name}: disabled ({reason}); set SLT_RUN_DISABLED=1 to force")
 
@@ -3169,7 +3171,7 @@ class PerfYamlItem(pytest.Item):
         keep = (
             failed
             or self.config.getoption("--slt-keep-resources", False)
-            or bool(os.environ.get("INT_KEEP_RESOURCES"))
+            or paths_mod.flag("INT_KEEP_RESOURCES")
         )
         if keep:
             return

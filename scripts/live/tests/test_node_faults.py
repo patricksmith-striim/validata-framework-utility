@@ -267,6 +267,11 @@ def test_node_fault_gate_precedes_input_snapshot_and_provision(monkeypatch, opt_
         with pytest.raises(RuntimeError, match="snapshot reached"):
             plugin.LiveItem._runtest(item)
         assert calls == ["snapshot"]
+    elif opt_in == "true":
+        # Only 1 is on; any other value is refused (pytest_configure refuses it before any case).
+        with pytest.raises(plugin.paths.FlagError, match="SLT_ENABLE_NODE_FAULTS='true'"):
+            plugin.LiveItem._runtest(item)
+        assert calls == []
     else:
         with pytest.raises(pytest.skip.Exception, match="SLT_ENABLE_NODE_FAULTS"):
             plugin.LiveItem._runtest(item)

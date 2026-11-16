@@ -331,7 +331,7 @@ def _default_compose_up(defn: ServiceDef, progress=None) -> None:
     compose = defn.dir / defn.compose
     cenv = _compose_env()   # os.environ + any STRIIM_HOME-derived license vars (striim bring-up)
     idle_sql = pgidle.policy_sql(cenv, "SLT_PG_IDLE_TRANSACTION_TIMEOUT_MS", "sltdb") if defn.name == "postgres" else None
-    if not os.environ.get("SLT_KEEP_SERVICES") and not (context and defn.name == "kafka"):
+    if not paths.flag("SLT_KEEP_SERVICES") and not (context and defn.name == "kafka"):
         # Wipe stale volumes so a fresh bring-up starts from clean state. Under SLT_KEEP_SERVICES
         # (parallel runs / fast re-runs, spec §C.6) we must NOT `down -v` first — that destroys the
         # shared emulator volumes a sibling worker or a prior kept run depends on; reuse them as-is
@@ -374,7 +374,7 @@ def _default_compose_up(defn: ServiceDef, progress=None) -> None:
         except FileNotFoundError as e:
             raise DockerUnavailable(f"docker not found: {e}") from e
         if r.returncode != 0:
-            if not os.environ.get("SLT_KEEP_SERVICES"):
+            if not paths.flag("SLT_KEEP_SERVICES"):
                 # Under SLT_KEEP_SERVICES (parallel runs, spec §C.6) a transient up-failure
                 # must NOT `down -v` — that destroys the shared emulator volumes sibling
                 # workers depend on. Leave them standing; the operator/next serial run cleans up.
@@ -400,7 +400,7 @@ def _default_compose_up(defn: ServiceDef, progress=None) -> None:
     except FileNotFoundError as e:
         raise DockerUnavailable(f"docker not found: {e}") from e
     if returncode != 0:
-        if not os.environ.get("SLT_KEEP_SERVICES"):
+        if not paths.flag("SLT_KEEP_SERVICES"):
             # See the non-streaming path above: skip the volume-nuking `down -v` cleanup
             # under SLT_KEEP_SERVICES so a worker's up-failure doesn't wipe shared emulators.
             dockercmd.run(["docker", "compose", "-f", str(compose), "down", "-v"],
@@ -571,7 +571,7 @@ def resolve(name: str, env: dict, started: set, compose_up=None, post_up=None, p
         # was never created is a no-op. An ordinary failure takes it out again, so the next case retries.
         started.add(defn.container)
         try:
-            if env.get("PYTEST_XDIST_WORKER") or env.get("SLT_PARALLEL"):
+            if env.get("PYTEST_XDIST_WORKER") or paths.flag("SLT_PARALLEL", env):
                 # Parallel run (xdist workers OR the console's N single-test subprocesses, spec
                 # §D.3.2): serialize the one-time bring-up across processes so they don't race
                 # `docker compose up` / re-run post_up on the shared container (spec §C.4). The

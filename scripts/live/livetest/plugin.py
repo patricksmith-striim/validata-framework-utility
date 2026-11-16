@@ -351,6 +351,11 @@ def pytest_configure(config):
     _collect_every_case_root(config)
     from livetest import paths
     os.environ.update(paths.effective_env(os.environ))
+    # A switch set to anything but 1 or 0 is a settings mistake: refuse the run before anything
+    # reads it (paths.flag).
+    problems = paths.flag_problems(os.environ)
+    if problems:
+        raise pytest.UsageError("livetest: " + "\n".join(problems))
     # Serial guard. The live suite runs SERIALLY unless SLT_PARALLEL=1: tests share
     # fixed-name DB objects (Oracle QASOURCE.*, MSSQL dbo.*, one Spanner instance) and one
     # shared Striim cluster. Phase-1 tokenized every per-test object name
@@ -361,7 +366,7 @@ def pytest_configure(config):
     # set without the opt-in.
     nprocs = getattr(config.option, "numprocesses", None)
     dist = getattr(config.option, "dist", None)
-    if (nprocs or (dist and dist != "no")) and not os.environ.get("SLT_PARALLEL"):
+    if (nprocs or (dist and dist != "no")) and not paths.flag("SLT_PARALLEL"):
         raise pytest.UsageError(
             "the live-test suite runs SERIALLY by default — it shares one Striim cluster "
             "and shared DB service containers. Per-test object names are now tokenized "
@@ -414,7 +419,7 @@ def pytest_configure(config):
         # (livetest.preflight) OWNS the coordination registries — it clears them once up front
         # and populates them; each fan-out subprocess ALSO matches this branch (it is its own
         # xdist-less controller), so it must NOT wipe what pre-flight registered.
-        if not os.environ.get("SLT_OPS_PRELOADED"):
+        if not paths.flag("SLT_OPS_PRELOADED"):
             os.environ.setdefault("SLT_RUN_EPOCH", uuid.uuid4().hex[:12])
             clear_provision_registry(_STATE_DIR)
     # the xdist controller collects no live item, so a distributed live run
@@ -580,7 +585,7 @@ def _slt_infra_guard(session, exitstatus):
     # earlier version tested the variable before the causes were known, so a developer who had
     # exported it during a cluster outage -- on this banner's own advice -- kept a green run
     # afterwards when their `mvn package` broke. You cannot declare a compile error absent.
-    if os.environ.get("SLT_ALLOW_NO_CLUSTER") and not causes & {"build"}:
+    if paths.flag("SLT_ALLOW_NO_CLUSTER") and not causes & {"build"}:
         return exitstatus
 
     # "error" as well as "failed": an item that dies in setup or teardown lands there, and it
@@ -737,7 +742,7 @@ def _resolve_striim(config):
                                                     lambda: probe_reachable(url, user, pw), _port_open)
     if _slt_why:
         return _fail(_slt_why)
-    native_only = paths.setting("SLT_STRIIM_NATIVE_ONLY") == "1"
+    native_only = paths.parse_flag("SLT_STRIIM_NATIVE_ONLY", paths.setting("SLT_STRIIM_NATIVE_ONLY"))
     if native_only and tryouts:
         return _hard_fail(f"{_tryout.TRYOUT_ENV} needs the Docker cluster, and SLT_STRIIM_NATIVE_ONLY=1 uses "
                           f"only the Striim at STRIIM_URL")
@@ -1696,9 +1701,9 @@ def should_keep_resources(env: dict, deploy_attempted: bool, succeeded: bool) ->
     status, logs) -- exactly what the flag exists to preserve. A failure BEFORE any
     deploy attempt (service resolution, DDL, seeding) still tears down: no app-side
     state exists yet."""
-    if env.get("SLT_KEEP_RESOURCES"):
+    if paths.flag("SLT_KEEP_RESOURCES", env):
         return True
-    return bool(env.get("SLT_KEEP_RESOURCES_ON_ERROR")) and deploy_attempted and not succeeded
+    return paths.flag("SLT_KEEP_RESOURCES_ON_ERROR", env) and deploy_attempted and not succeeded
 
 def _ended_as_expected(config, m, exc) -> bool:
     """True when `exc` ends the case as a skip or an expected xfail: not a failure to keep resources for."""
@@ -1715,7 +1720,7 @@ def _skip_shared_teardown(env: dict) -> bool:
     teardown is the operator's / next serial run's job, never a worker's — a worker finishing
     first would otherwise `compose down` the cluster + service containers out from under its
     still-running siblings (spec §C.4)."""
-    return bool(env.get("PYTEST_XDIST_WORKER") or env.get("SLT_KEEP_SERVICES"))
+    return bool(env.get("PYTEST_XDIST_WORKER") or paths.flag("SLT_KEEP_SERVICES", env))
 
 def _parallel(env: dict) -> bool:
     """True when tests execute CONCURRENTLY against the shared cluster, in EITHER model:
@@ -1726,7 +1731,7 @@ def _parallel(env: dict) -> bool:
     register-once) must engage in BOTH — Phase 2 keyed them on the xdist worker var alone, which
     the console's separate-subprocess model does not set. Serial (neither var) is unchanged; the
     xdist worker case is unchanged (the var is still present)."""
-    return bool(env.get("PYTEST_XDIST_WORKER") or env.get("SLT_PARALLEL"))
+    return bool(env.get("PYTEST_XDIST_WORKER") or paths.flag("SLT_PARALLEL", env))
 
 def build_modules(m: TestManifest, release: dict, report=None) -> list:
     """Build every op:/udf: module's jar (opartifacts.build_jar) against `release`.
@@ -2385,13 +2390,13 @@ class LiveItem(pytest.Item):
         m = load_manifest(self.manifest_path)
         self._slt_topology = m.topology            # effective topology (Phase A: the manifest's)
         self._slt_services = list(m.requires)
-        if m.disabled and not os.environ.get("SLT_RUN_DISABLED"):  # known-bug/quarantine: skip before
+        if m.disabled and not paths.flag("SLT_RUN_DISABLED"):  # known-bug/quarantine: skip before
             pytest.skip(f"disabled: {m.disabled if isinstance(m.disabled, str) else 'disabled'}"  # provisioning
                         " (set SLT_RUN_DISABLED=1 to force-run)")
-        if m.disabled_parallel and _parallel(os.environ) and not os.environ.get("SLT_RUN_DISABLED"):
+        if m.disabled_parallel and _parallel(os.environ) and not paths.flag("SLT_RUN_DISABLED"):
             pytest.skip(f"disabled_parallel: {m.disabled_parallel if isinstance(m.disabled_parallel, str) else 'disabled_parallel'}"
                         " (set SLT_RUN_DISABLED=1 to force-run)")
-        if getattr(m, "recover", None) and m.recover.get("node") and os.environ.get("SLT_ENABLE_NODE_FAULTS") != "1":
+        if getattr(m, "recover", None) and m.recover.get("node") and not paths.flag("SLT_ENABLE_NODE_FAULTS"):
             pytest.skip("node faults require SLT_ENABLE_NODE_FAULTS=1 on a dedicated disposable stack")
         # C8.3: every referenced input is read once, after the disabled skips and
         # before any provisioning; exact assertions parse these bytes and never re-read a golden.
@@ -2515,7 +2520,7 @@ class LiveItem(pytest.Item):
         # assertion ran" guard, then report the test as skipped. Independent of
         # SLT_KEEP_RESOURCES (whether the started app is kept) and SLT_RUN_DISABLED
         # (whether a disabled test runs at all) — this flag governs verification only.
-        skip_verify = bool(os.environ.get("SLT_SKIP_VERIFY"))
+        skip_verify = paths.flag("SLT_SKIP_VERIFY")
         # Run-level progress reporter, live for the WHOLE test (not just service provisioning) so
         # the console log shows what the long, otherwise-silent deploy→wait→assert phase is doing.
         # `_report(label, phase)` streams one newline-terminated line via capture-suspend (deduped
@@ -2881,7 +2886,7 @@ class LiveItem(pytest.Item):
                     # What the case loaded, for its run record (livetest.caserecord).
                     # Under SLT_OPS_PRELOADED the console pre-flight built and loaded the jars; this
                     # build only names them, so the bytes the server runs are not these.
-                    preloaded_run = bool(os.environ.get("SLT_OPS_PRELOADED"))
+                    preloaded_run = paths.flag("SLT_OPS_PRELOADED")
                     self._slt_case_jars = [{"module": mod["jar"], "path": str(getattr(b, "path", "")),
                                             "sha256": getattr(b, "record_sha256", "") or None,
                                             "origin": "preloaded" if preloaded_run else getattr(b, "origin", "")}
@@ -2895,7 +2900,7 @@ class LiveItem(pytest.Item):
                     # SLT_ALLOW_NO_CLUSTER, and the guard fails the run whatever else ran.
                     self._slt_infra_skip = "build"
                     pytest.skip(f"{m.name}: {e}")
-                preloaded = bool(os.environ.get("SLT_OPS_PRELOADED"))
+                preloaded = paths.flag("SLT_OPS_PRELOADED")
                 if preloaded:
                     # Console pre-flight (Phase 3) already built+uploaded+registered the OP
                     # union. Derive the ${*_JAR}/${*_NAME} tokens from the cache-hit build
@@ -3151,7 +3156,7 @@ class LiveItem(pytest.Item):
                                          progress=_hb("waiting for app RUNNING"))
                 except Exception as e:
                     if _sp.op_loader_poisoned(_node_log_since(ctx, poison_marks)):
-                        if os.environ.get("SLT_PARALLEL"):
+                        if paths.flag("SLT_PARALLEL"):
                             # Parallel (spec §C.5): do NOT restart_app_nodes here — it restarts
                             # the SHARED app nodes and would kill every other worker's running
                             # apps. Drop a marker beside the junit for the orchestrator (console
@@ -4158,7 +4163,7 @@ class LiveItem(pytest.Item):
             if should_keep_resources(os.environ, deploy_attempted, succeeded or _ended_as_expected(
                     self.config, m, sys.exc_info()[1])):
                 self.config._slt_keep_resources = True   # keep provisioned services at session end
-                _slt_keep_reason = ("SLT_KEEP_RESOURCES is set" if os.environ.get("SLT_KEEP_RESOURCES")
+                _slt_keep_reason = ("SLT_KEEP_RESOURCES is set" if paths.flag("SLT_KEEP_RESOURCES")
                                     else f"{m.name} failed and SLT_KEEP_RESOURCES_ON_ERROR is set")
                 note = (" [SLT_SKIP_VERIFY: app started + seeded, output NOT verified]"
                         if skip_verify else "")
@@ -4199,7 +4204,7 @@ class LiveItem(pytest.Item):
                 gcs_cleanup=gcs_cleanup, kafka_cleanup=kafka_cleanup, upload_names=_slt_upload_names(),
                 file_globs=_slt_file_globs(),
                 checkpoint_ns=ident.ns if m.modules else None, keep_reason=_slt_keep_reason,
-                keep_slots=bool(os.environ.get("SLT_KEEP_RESOURCES")))
+                keep_slots=paths.flag("SLT_KEEP_RESOURCES"))
             if _pg_reset_error is not None:
                 cleanup.status, cleanup.verified = "failed", False
                 cleanup.detail = "; ".join(filter(None, (
@@ -4216,7 +4221,7 @@ class LiveItem(pytest.Item):
                 cleanup.failures.extend({"kind": "oracle-observer", "name": subject, "error": error}
                                         for subject, error in _observers["failed"].items())
             if _slt_keep_reason:
-                if os.environ.get("SLT_KEEP_RESOURCES"):
+                if paths.flag("SLT_KEEP_RESOURCES"):
                     print("[slt] PostgreSQL replication slots and app state kept for exploration.")
                 else:
                     print(f"[slt] STOP sent to apps: {', '.join(cleanup.stopped_apps)}; "
@@ -4696,7 +4701,7 @@ def pytest_sessionfinish(session, exitstatus):
     # operator / next serial run, or, in an exclusive run, to the controller (from the workers' reports).
     _slt_report_worker_teardown(config)
     unaccounted = not _skip_shared_teardown(os.environ) and _slt_exclusive_stack_unaccounted(config, exitstatus)
-    if unaccounted and (os.environ.get("SLT_KEEP_RESOURCES") or os.environ.get("SLT_KEEP_RESOURCES_ON_ERROR")):
+    if unaccounted and (paths.flag("SLT_KEEP_RESOURCES") or paths.flag("SLT_KEEP_RESOURCES_ON_ERROR")):
         # A crash or an interrupt is a failure, so either keep setting keeps the stack.
         config._slt_keep_resources = True
         print(f"[slt] keeping exclusive stack {stack.prefix()} (SLT_KEEP_RESOURCES*); stop it with: "

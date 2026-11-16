@@ -455,7 +455,7 @@ The reset is outside the measured interval. Its wall-clock cost (reset plus the 
 
 A test with no `requires:` and no `ddl:`/`seed:` performs no database work at all.
 
-After the item's last iteration, a final teardown drops the test's Postgres objects (whole schemas in a serial run, `${TID}` objects in a parallel one), Oracle prefix tables, and Spanner `${TID}` tables — skipped when any iteration failed (kept for debugging) or `--slt-keep-resources`/`INT_KEEP_RESOURCES` is set.
+After the item's last iteration, a final teardown drops the test's Postgres objects (whole schemas in a serial run, `${TID}` objects in a parallel one), Oracle prefix tables, and Spanner `${TID}` tables — skipped when any iteration failed (kept for debugging) or `--slt-keep-resources`/`INT_KEEP_RESOURCES=1` is set.
 
 ### Sequencing
 

@@ -40,7 +40,7 @@ from urllib.parse import urlparse
 
 from filelock import FileLock, Timeout
 
-from livetest import dockercmd, lockdir, stack
+from livetest import dockercmd, lockdir, paths, stack
 
 OWNERSHIP_ENV = "SLT_INFRA_OWNERSHIP"
 MODES = ("exclusive", "shared")
@@ -399,7 +399,7 @@ def declare(env=None, *, run=None, pid_alive=None) -> Infra:
 
 
 def _declare_shared(env, port: int, lock_dir: Path) -> Infra:
-    if not env.get("SLT_KEEP_SERVICES"):
+    if not paths.flag("SLT_KEEP_SERVICES", env):
         raise InfraOwnershipError(
             f"{OWNERSHIP_ENV}=shared requires SLT_KEEP_SERVICES=1: without it service bring-up "
             f"wipes volumes and session end tears the shared stack down")

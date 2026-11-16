@@ -38,7 +38,7 @@ import subprocess
 import warnings
 from pathlib import Path
 
-from livetest import dockercmd, lockdir, opartifacts, opregistry, stack
+from livetest import dockercmd, lockdir, opartifacts, opregistry, paths, stack
 from livetest import infra as _slt_infra   # the shared-service adapter, C7.1
 from livetest import striim_provision as _sp
 from livetest.manifest import CardinalityWarning, load_manifest
@@ -661,7 +661,7 @@ def teardown(test_ids, env=None, explicit: bool = False, force: bool = False) ->
     Refused (exit 2) while another live session uses the stack, unless ``force``.
     """
     env = os.environ if env is None else env
-    if not explicit and (env.get("SLT_KEEP_SERVICES") or env.get("SLT_KEEP_RESOURCES_ON_ERROR")):
+    if not explicit and (paths.flag("SLT_KEEP_SERVICES", env) or paths.flag("SLT_KEEP_RESOURCES_ON_ERROR", env)):
         _log("SLT_KEEP_SERVICES set — leaving services + cluster up")
         return 0
     if stop_refused(env, force, stop_command(test_ids, env)):

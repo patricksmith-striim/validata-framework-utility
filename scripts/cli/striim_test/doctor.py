@@ -249,6 +249,26 @@ def check_env(env: dict, clone: Path) -> tuple[list, dict]:
     return checks, values
 
 
+def check_switches(env: dict) -> list:
+    """A switch set to anything but 1 or 0 refuses the run in both engines (paths.flag)."""
+    from livetest import paths
+    try:
+        merged = paths.effective_env(env)
+    except paths.PathConfigError:
+        return []                       # reported by check_env
+    return [_fail("switch", problem) for problem in paths.flag_problems(merged)]
+
+
+def _switch(name: str, env: dict) -> bool:
+    """A switch, for a check that depends on it; a bad value reads as off, and check_switches
+    reports it."""
+    from livetest import paths
+    try:
+        return paths.flag(name, env)
+    except paths.FlagError:
+        return False
+
+
 def check_api_timeout(env: dict) -> list:
     """STRIIM_API_TIMEOUT must parse as striim_api parses it; a run would otherwise fail only once
     its first Striim client is built, after provisioning, and read as a topology error."""
@@ -743,7 +763,7 @@ def check_case_gates(files: list, env: dict, dotenv: dict, tier_of=None, which=N
         except Exception:                   # noqa: BLE001 - reported by the manifest check
             continue
         subject = f"case {f.parent.name}"
-        if (getattr(m, "recover", None) or {}).get("node") and env.get("SLT_ENABLE_NODE_FAULTS") != "1":
+        if (getattr(m, "recover", None) or {}).get("node") and not _switch("SLT_ENABLE_NODE_FAULTS", env):
             checks.append(_skip(subject, "recover.node skips without SLT_ENABLE_NODE_FAULTS=1 (a dedicated, "
                                          "disposable stack)"))
         if native and m.topology in ("cluster", "agent"):
@@ -816,7 +836,7 @@ def check_int_session(env: dict) -> list:
     from filelock import FileLock, Timeout
 
     from inttest import plugin as int_plugin
-    if env.get("INT_ALLOW_CONCURRENT_SESSIONS"):
+    if _switch("INT_ALLOW_CONCURRENT_SESSIONS", env):
         return []
     path = int_plugin._session_lock_path()
     if not path.exists():
@@ -1073,7 +1093,12 @@ def check_services(need: dict, env: dict, tcp=None, login=None, docker=None,
             checks.append(_fail(subject, f"required by {cases}: {why}", INFRA) if fail
                           else _skip(subject, f"required by {cases}: {why}; they skip until then"))
             continue
-        if defn.opt_in_env and not registry.opted_in(defn.opt_in_env, env):
+        try:
+            opted = not defn.opt_in_env or registry.opted_in(defn.opt_in_env, env)
+        except ValueError as e:         # paths.FlagError: the gate is set to neither 1 nor 0
+            checks.append(_fail(subject, str(e)))
+            continue
+        if not opted:
             checks.append(_warn(subject, f"opt-in: `start all` and other bring-ups not tied to a "
                                          f"case leave it out unless {defn.opt_in_env}=1 or "
                                          f"SLT_EMULATORS=1; a live case that requires it ({cases}) "
@@ -1192,6 +1217,7 @@ def run_checks(env: dict, clone: Path, cases=(), probe=None, docker=None, tcp=No
     # Integration and perf cases run without a Striim cluster: with only those selected, the
     # cluster, ownership and lock dir do not decide the run.
     cluster = not (integration and len(integration) == len(files))
+    checks += check_switches(run_env)
     checks += check_api_timeout(run_env)
     if cluster:
         checks += check_tryouts(run_env)

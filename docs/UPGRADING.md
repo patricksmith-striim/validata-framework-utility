@@ -196,6 +196,13 @@ partial download) stops the run, naming it; delete it and run again. Each `strii
 there is pinned on the first run after the upgrade, in `deps/.slt-sha256-pins.json`. If Striim
 republishes a package under the same name, delete the file and its entry in that record.
 
+### Switches take `1` or `0` (breaking)
+
+An on/off setting set to anything but `1` or `0` now stops the run with exit 2. Search your
+`.env`, CI and scripts for values such as `true`, `yes` or `on` and write `1`. A switch set to `0`
+is now off: if a script relied on `SLT_KEEP_SERVICES=0`, `SLT_SKIP_VERIFY=0` or a similar value
+turning something on, set `1` instead. `striim-test doctor` lists each bad value.
+
 ### `INT_SHARED_SERVICES` removed
 
 The setting is no longer read. A session that set it now takes the integration session lock and
