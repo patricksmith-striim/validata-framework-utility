@@ -212,3 +212,29 @@ def test_a_bad_switch_stops_the_run_before_anything_runs(tmp_path):
     assert rc == pytest.ExitCode.USAGE_ERROR, out[-1500:]
     assert "SLT_RUN_DISABLED='true'" in out
     assert "skipped" not in out
+
+
+# --- the entry points outside pytest ---------------------------------------------------------
+
+def test_livetest_cli_refuses_a_bad_switch_before_any_command(monkeypatch, capsys):
+    from livetest import cli, project
+    ran = []
+    monkeypatch.setattr(project, "load_and_activate", lambda *a, **k: None)
+    monkeypatch.setattr(cli, "cmd_down", lambda targets: ran.append(targets) or 0)
+    monkeypatch.setattr(sys, "argv", ["livetest.cli", "stop", "all"])
+    monkeypatch.setenv("SLT_KEEP_SERVICES", "yes")
+    assert cli.main() == 2
+    assert ran == [] and "SLT_KEEP_SERVICES='yes'" in capsys.readouterr().err
+    monkeypatch.setenv("SLT_KEEP_SERVICES", "1")
+    assert cli.main() == 0 and ran == [["all"]]
+
+
+def test_preflight_refuses_a_bad_switch_before_any_step(monkeypatch):
+    from livetest import preflight
+    ran = []
+    monkeypatch.setattr(preflight, "teardown", lambda tests: ran.append(tests) or 0)
+    monkeypatch.delenv("GOLD_TARGETS", raising=False)
+    monkeypatch.setenv("SLT_KEEP_RESOURCES_ON_ERROR", "true")
+    assert preflight.main(["--teardown"]) == 2 and ran == []
+    monkeypatch.setenv("SLT_KEEP_RESOURCES_ON_ERROR", "0")
+    assert preflight.main(["--teardown"]) == 0 and ran == [[]]

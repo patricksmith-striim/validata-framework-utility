@@ -968,6 +968,10 @@ def main(argv=None) -> int:
         except Exception as e:
             _log(f"ERROR: cannot activate the project manifest: {e}")
             return 2
+    problems = paths.flag_problems(paths.effective_env(os.environ))
+    if problems:                               # a switch set to neither 1 nor 0 (paths.flag)
+        _log("ERROR: " + "\n".join(problems))
+        return 2
     if args.restart_app_nodes:
         return restart_app_nodes()
     if args.teardown:

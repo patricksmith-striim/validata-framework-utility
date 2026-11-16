@@ -167,6 +167,11 @@ def main() -> int:
     except Exception as e:                     # ProjectError, PathConfigError, LayoutError
         print(f"livetest.cli: cannot activate the project manifest: {e}", file=sys.stderr)
         return 2
+    from livetest import paths
+    problems = paths.flag_problems(paths.effective_env(os.environ))
+    if problems:                               # a switch set to neither 1 nor 0 (paths.flag)
+        print("livetest.cli: " + "\n".join(problems), file=sys.stderr)
+        return 2
     _adopt_stack_prefix()
     p = argparse.ArgumentParser(prog="python -m livetest.cli")
     sub = p.add_subparsers(dest="cmd", required=True)
