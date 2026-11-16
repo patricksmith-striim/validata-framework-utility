@@ -12,8 +12,17 @@ pytest_plugins = ["pytester"]
 CRASHED = '''
 FakeClient.current_status = lambda self, app: "CRASH" if STATE["running"] else "CREATED"
 '''
+# The reason counts only in a log record that names the case's namespace, so the log line names
+# every namespace whose status was read (the tokenized one is not known before the run).
 LOG_HAS_REASON = '''
-P._node_log_since = lambda ctx, marks, run=None, **kw: "ERROR ORA-00001: unique constraint violated"
+_namespaces = set()
+_crashed = FakeClient.current_status
+def _status(self, app):
+    _namespaces.add(app.split(".", 1)[0])
+    return _crashed(self, app)
+FakeClient.current_status = _status
+P._node_log_since = lambda ctx, marks, run=None, **kw: "".join(
+    f"2026-11-14 10:00:00,000 ERROR {ns}.app ORA-00001: unique constraint violated\\n" for ns in sorted(_namespaces))
 '''
 NATIVE = '''
 _resolve_striim = P._resolve_striim

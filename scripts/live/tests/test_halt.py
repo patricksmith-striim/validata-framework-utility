@@ -307,7 +307,7 @@ def test_only_native_mode_keeps_the_unverified_pass(mode):
 
 def test_docker_halt_contains_still_matches_a_readable_log():
     records = assert_halt(StubClient(status="HALT"), "NS.App", timeout=5, poll=0, contains=("conflict",),
-                          mode="docker", log_tail=lambda: "...conflict on USERS...")
+                          mode="docker", log_tail=lambda: "...NS.App: conflict on USERS...")
     assert records[0]["status"] == "passed" and "verified" in records[0]["detail"]
     with pytest.raises(AssertionFailed, match="missing"):
         assert_halt(StubClient(status="HALT"), "NS.App", timeout=5, poll=0, contains=("conflict",),
