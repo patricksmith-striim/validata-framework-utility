@@ -82,7 +82,8 @@ the last release; the release makes it that version's entry.
   `requires:`, `timeout:` or `disabled:`) is refused, naming the key; it used to load and run
   without it. A live `service.yaml` with a key the service loader does not read (a misspelt
   `live_override_env:`) is refused when the service loads. The perf loader already refused
-  unknown top-level keys and now shares the regression loader's key set.
+  unknown top-level keys and now shares the regression loader's key set; it refuses `setup:`,
+  which it does not read.
 - **`SLT_INFRA_OWNERSHIP=shared` keeps the integration services a session started.** The session
   no longer runs `docker compose down -v` on them at its end; it clears the started-services record
   and prints what it left running, as `INT_KEEP_SERVICES=1` does, which is no longer needed beside
@@ -205,6 +206,13 @@ the last release; the release makes it that version's entry.
   own BigQuery emulator under another name. (#80)
 - A Bigtable emulator service on both tiers, as groundwork: table and row helpers only, with no
   manifest setup or assertion yet. Its overlay is always applied to the Docker cluster. (#85)
+- Bigtable setup and assertions on both tiers. `setup: bigtable:` creates each table (column
+  families, GC rules, seed rows) before the case's `ddl:` and drops it at teardown unless the run
+  is kept; a table that already exists is refused in the live tier. Live `assert: bigtable:`
+  reads each table whole through its route and compares it to `expected`, and can be named in an
+  `xfail`'s `tiers`. Integration `assert.target` on a `bigtable-*` route names the table in
+  `query` and compares its rows. Both need `requires: [bigtable]`. The emulator is pinned by index
+  digest for arm64 and amd64. (#96)
 - Integration: a stock `mariadb` service and route (#92); per-event recovery `position` and
   resume by position (#84); `INT_VARIANT_WORKERS` to drive variant groups concurrently (#87);
   `assert.monitor` for `DDL_METRICS` (exact) and `ADAPTER_BASIC` (subset) (#93); mock source
@@ -260,7 +268,7 @@ the last release; the release makes it that version's entry.
   `DATABASE_WRITE_INFO`, `TIME_TAKEN_FOR_MERGE`, `ADAPTER_BASIC` and `ADAPTER_DETAIL`; the
   exception-store publish route and stemma paths; the `Position` constructors; and cached and
   compact paths, as the platform has them. (#75, #77, #83, #86, #88, #89, #93)
-- Framework tests: the six `assert:` tiers no test reached are now exercised through the plugin,
+- Framework tests: the seven `assert:` tiers no test reached are now exercised through the plugin,
   as are the Postgres reset guard and the three surplus-data refusals (a target with extra rows,
   an extra emitted event, an unexpected emitted key). Tests only; no behaviour change.
 - Internal: the paths core block carries `SLT_STRIIM_TRYOUT_JARS` in both engines, and the
