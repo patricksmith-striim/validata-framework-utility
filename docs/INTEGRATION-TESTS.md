@@ -146,7 +146,7 @@ operator constructs and runs. `matrix:` and `variants:` are described below.
 the keys allowed, and `striim-test doctor --case` reports it. A misspelt `matrix:`, `requires:`,
 `timeout:` or `disabled:` is an error, not a case that runs once, without its services, with the
 default timeout or while meant to be disabled. A perf case follows the same rule, with
-`performance:` in place of `assert:`.
+`performance:` in place of `assert:` and without `setup:`, which it would not read.
 
 **`assert.data` is exact and type-strict.** `true` is not `1`, `5.0` is not `5`, and decimals are
 compared digit for digit, never through a float.

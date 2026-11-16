@@ -396,6 +396,10 @@ def load_perf_manifest(path) -> PerfManifest:
         raise PerfManifestError(f"{path}: manifest is empty")
     if not isinstance(raw, dict):
         raise PerfManifestError(f"{path}: top level must be a mapping, got {type(raw).__name__}")
+    if "setup" in raw:
+        raise PerfManifestError(
+            f"{path}: top-level 'setup' is not read in a perf case -- a perf iteration creates no "
+            f"setup tables; set the table up in a regression case")
     _reject_unknown_keys(raw, {"performance"} | _TEST_MANIFEST_KEYS, "top level", path)
 
     perf_dir = path.parent

@@ -55,7 +55,7 @@ DEFAULT_TIMEOUT = 120
 #: permutations. inttest.perfmanifest shares the set, with `performance:` in place of `assert:`.
 _TEST_MANIFEST_KEYS = frozenset({
     "name", "op", "udf", "properties", "password_properties", "purpose", "requires", "ddl",
-    "seed", "timeout", "disabled", "types", "source", "target", "variants", "matrix",
+    "seed", "timeout", "disabled", "types", "source", "target", "variants", "matrix", "setup",
 })
 
 #: `seed:` runs before the reader is driven (the default) or after its source has started.
