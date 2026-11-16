@@ -1803,7 +1803,8 @@ seeding before its reader starts and failing for a reason the manifest does not 
 The same rule applies to `assert:` tier names in live and integration cases alike. In a live
 case it also applies inside `op:`/`udf:` entries, `ddl:`, `seed:`, `server_files:` and
 `generate:` entries, `action:` entries (including `stop_start_cycle` and its `concurrent:`
-loops), and every `data`, `diff`, `file`, `gcs` and `json` assertion spec. Those specs are also
+loops), `setup: bigtable:` entries, and every `data`, `diff`, `file`, `gcs`, `json` and `bigtable`
+assertion spec. Those specs are also
 checked for their required keys at load (a `data` spec with no `min_rows`/`rows`/`match`, say,
 or a typed `exact` spec without the `target`, `path` or `source`/`target` its reader reads),
 so `striim-test doctor --case` reports a misspelt `multset:` or `macth:` instead of the run

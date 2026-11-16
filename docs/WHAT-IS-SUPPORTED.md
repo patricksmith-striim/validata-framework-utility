@@ -240,7 +240,7 @@ tier, and in the integration tier stops the run at collection. `striim-test doct
 | `nothing.read_timeout` | 5s by default; positive duration | One failed or over-budget probe fails the absence check |
 | Snapshot rows/bytes | 100000 rows and 64 MiB by default; at most 1000000 and 512 MiB | Row budget covers all tables; byte budget applies per table |
 | `snapshot_observer.max_snapshots` | 10000 by default; at most 100000 | Exhaustion fails instead of truncating history |
-| unknown `test.yaml` keys | refused at load, top level and inside `op:` / `udf:` / `ddl:` / `seed:` / `server_files:` / `generate:` / `action:` (with `concurrent:`) / `exact:` / `lifecycle:` / `recover:` / `xfail:` / `raw:` / `nothing:` / `transactions:` / `snapshot_observer:` / `audit:` and every `data` / `diff` / `file` / `gcs` / `json` assertion spec | `striim-test doctor --case` reports them. `assert:` tier names are checked too (above) |
+| unknown `test.yaml` keys | refused at load, top level and inside `op:` / `udf:` / `ddl:` / `seed:` / `server_files:` / `generate:` / `action:` (with `concurrent:`) / `exact:` / `lifecycle:` / `recover:` / `xfail:` / `raw:` / `nothing:` / `transactions:` / `snapshot_observer:` / `audit:` / `setup: bigtable:` and every `data` / `diff` / `file` / `gcs` / `json` / `bigtable` assertion spec | `striim-test doctor --case` reports them. `assert:` tier names are checked too (above) |
 
 ## Check routes
 
