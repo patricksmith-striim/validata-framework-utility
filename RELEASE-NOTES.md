@@ -10,7 +10,8 @@ the last release; the release makes it that version's entry.
 - **Misspelt or unknown keys in an assertion spec are refused at load.** This covers keys inside
   a `data`, `diff`, `file`, `gcs` or `json` spec, and inside a `ddl`, `seed`, `server_files`,
   `generate`, `concurrent` or `stop_start_cycle` entry. An incomplete `data`, `diff`, `file`,
-  `gcs` or `json` spec is refused too. Before, such a key was ignored, so `exat: true` silently
+  `gcs` or `json` spec is refused too, including a typed `exact:` spec without the endpoint its
+  reader needs, and `nothing:` is accepted only on `data` and `file`. Before, such a key was ignored, so `exat: true` silently
   ran a weaker comparison, or the case was refused only after deploy. `striim-test doctor`
   exits 2 on these.
 - **`expect_halt_contains` fails in Docker mode when the halt reason cannot be checked.** When a
@@ -28,6 +29,125 @@ the last release; the release makes it that version's entry.
   after upgrading rebuilds each jar once**, because no live jar has a record yet. The integration
   tier rebuilds each `FieldCommon` module once. The integration and perf tiers no longer rebuild
   a module whose pom does not add `OpenProcessorCommon` when that changes.
+- **A data or file `match:` without a count warns at load, and is refused in a `recover:`
+  case.** A `match:` without `rows:`, `ordered: true`, `events:`, `multiset: true` or `exact:`
+  compares sets of rows, so a duplicated row passes. `striim-test doctor` shows the warning. Add
+  `rows: N` (the golden's row count) or `exact:`. `rows: 0` is refused unless the same route has
+  a positive spec, or the case has `lifecycle:` or `expect_halt: true`.
+- **`assert.json` compares arrays in order, and integers and floats are distinct.** List the
+  arrays whose order the writer does not fix under the new `unordered:` key (`items`,
+  `"items[].subitems"`, `$`). `1` no longer equals `1.0`. A golden with two rows for one key, or
+  an object with a duplicate member, is refused; a read with two rows for one key fails.
+- **`assert.monitor`, `assert.jmx` and `assert.gcs` specs with no positive figure hold to the
+  timeout.** A spec with only `max` bounds, zeros, `false`, `absent` or an empty object must keep
+  matching until `timeout` instead of passing on the first read. `{absent: true}` needs a
+  positive figure in the same monitor spec.
+- **A file `match` or `distinct_events` compares every event except a true boundary event** (no
+  `data`, `before` or `userdata`). Under `project: userdata`, an event the enricher did not stamp
+  now fails the golden instead of being skipped. `project: before` still skips events with no
+  before-image. A file whose last event never decodes, or that holds JSON values that are not
+  objects, now fails at the timeout instead of passing.
+- **Every app's status is read once after the last assertion.** An app in CRASH, HALT,
+  TERMINATED or DEPLOY_FAILED fails the case, smoke-only cases included; `expect_halt` cases are
+  not read. Lifecycle stability fails with `terminal-status:<status>` when an app has crashed or
+  halted by the end of the interval.
+- **Teardown failures fail a case without a `lifecycle:` block.** That is: a non-Postgres `ddl:`
+  table, a GCS bucket, a Kafka topic, an `op.upload` file or a FileWriter output part that cannot
+  be deleted (`unowned-teardown-failed`), or an OP checkpoint that cannot be deleted
+  (`op-checkpoint`). These were reported as verification gaps only.
+- **`checkpoint_history: empty` no longer passes on a history Striim could not show.** Only "not
+  available yet" counts as no checkpoint; any other answer fails `empty` at once, and `nonempty`
+  names it at the deadline.
+- **`stop_start_cycle` waits for each STOP to settle** (DEPLOYED, STOPPED or CREATED) and fails
+  the case otherwise. A `recover:` STOP or QUIESCE that leaves the app in CRASH or HALT fails the
+  case instead of restarting it.
+- **Live: a case skipped because its module could not be built fails the run**, even when other
+  cases passed. A prebuilt jar named by `SLT_PREBUILT_JAR`, `SLT_PREBUILT_JAR_<MODULE>` or
+  `SLT_PREBUILT_DIR` that cannot be used fails the case instead of skipping it. A case skipped
+  because a service is unavailable counts as absent infrastructure, as a missing Docker does.
+- **Integration: a case that could not be tested no longer passes the run.** A `requires:`
+  service that no services root defines is refused at load. A module reference whose directory is
+  missing, or a prebuilt jar (`SLT_PREBUILT_*`) that cannot be used, fails the case. A case
+  skipped because its module could not be built (no `STRIIM_HOME`, `mvn` or JDK) now fails the
+  run even when other cases passed, and `INT_ALLOW_ALL_SKIPPED` does not cover it.
+- **Integration: `assert.expect_error` is checked after rendering.** A variant that leaves a token
+  it uses empty, or renders it to a bare word like `Exception`, is refused at load.
+- **Integration: `ignore_fields` on a `metadata`/`userdata` key keeps the presence check.** The
+  key must be on exactly the events where the fixture has it.
+- **Perf: a `target:` iteration needs evidence of a write.** It fails when the writer
+  acknowledged none of the window's events, published `PROCESSED` 0, or reports neither. The
+  result file gains `measuredAckedEvents` and `publishedProcessed`.
+- **Integration `test.yaml` top-level keys and live `service.yaml` keys are checked at load.** An
+  integration case with a top-level key the loader does not read (a misspelt `matrix:`,
+  `requires:`, `timeout:` or `disabled:`) is refused, naming the key; it used to load and run
+  without it. A live `service.yaml` with a key the service loader does not read (a misspelt
+  `live_override_env:`) is refused when the service loads. The perf loader already refused
+  unknown top-level keys and now shares the regression loader's key set.
+- **`SLT_INFRA_OWNERSHIP=shared` keeps the integration services a session started.** The session
+  no longer runs `docker compose down -v` on them at its end; it clears the started-services record
+  and prints what it left running, as `INT_KEEP_SERVICES=1` does, which is no longer needed beside
+  it.
+- **Interrupted and failed bring-ups clean up.** Ctrl-C during a service or cluster bring-up no
+  longer leaves containers behind. An exclusive run that is interrupted or fails, serial included,
+  removes every container of its prefix. An exclusive declaration warns about containers of
+  earlier exclusive runs that nothing owns, with the command to stop them.
+- **Every Docker command has a bound:** 60 s for queries, 10 min for `compose down`, 3 h for
+  `compose up`, 1 h for captured builds. A hung Docker daemon fails the step and says so instead of
+  hanging. Waits for another process's bring-up lock are bounded too, and name the lock.
+- **recover: `expect_running: false` is checked.** The app must settle CREATED, DEPLOYED, STOPPED
+  or QUIESCED after the restore; RUNNING or a terminal status fails the case, and a `recovery`
+  record holds the status.
+- **recover: the settle after `post_recover` inputs and the `every` gap between cycles watch the
+  app**, as the restore's own settle does; the settle's last read is checked too.
+- **`alter_recompile` and `drop_recreate_app` (with `capture` or `stopped_seed`):** a STOP or
+  QUIESCE that leaves a RUNNING app in CRASH or HALT fails the case before captures, stopped seeds
+  or the ALTER run.
+- **`test.yaml`: a `timeout:` that is not a number** (`timeout: 90s`, or an empty `timeout`) is
+  refused at load as a `test.yaml` mistake naming the file (exit 2), instead of an internal error.
+- **Integration: `assert.expect_log` is refused where it is never read**: beside
+  `assert.expect_error` (it was a warning, #82), and on a smoke-only case, which never drives the
+  operator.
+- **Integration: an `assert.data` input with no events fails the case.** The operator was never
+  fed, and with `match: []` the case passed. An empty `match` beside real input still says the
+  operator filters everything.
+- **Integration: `assert.target` rows compare typed**, as `assert.data` values do: `true` is not
+  `1`, and `5.0` is not `5`. `ADAPTER_BASIC` subset expectations mean what they say: an empty
+  mapping requires an empty object, `null` requires the key to be absent, and list elements
+  compare typed.
+- **Integration: an `INT_VARIANT` that names no variant of any collected case is a usage error.**
+  Before, it dropped those cases and exited 0. A matching name prints the narrowing.
+- **Perf: a top-level `timeout:` is refused**, naming `performance.timeout`. It was accepted and
+  never read.
+- **A relative path setting exported in the shell** (for example `SLT_LIVE_CASES=samples`) is
+  resolved once, against the directory `striim-test` runs in, and the run uses that folder.
+- **`sync-framework.py` refuses (exit 2) to run inside the framework checkout** unless `--home` or
+  `FRAMEWORK_CHECKOUT` names one. Copy the template or example out first; consumer repos pick this
+  up by copying the new script from the template.
+- **`expect_halt_contains` on a halt while running is matched only in server-log records that
+  name the case's namespace.** A record is a timestamped line plus its continuation lines. Another
+  app's identical error text no longer satisfies it.
+- **`expect_halt: true` without `expect_halt_contains` is deprecated.** It loads with a warning,
+  `striim-test doctor` shows it, and a later release refuses it.
+- **A manifest the loader refuses is a collection error (exit 2)**, whatever `-m` selects, instead
+  of a run-time failure, or of silent deselection when a depth was misspelt. A manifest without
+  `depth:` is marked `depth_regression`.
+- **The `.slt.json` sidecar and `evidence.json` record an expected failure as `xfailed` and an
+  unexpected pass as `xpassed`**, where they said `skipped` and `passed`. An `xpassed` case never
+  qualifies, and the run ends with an `XPASS` section naming each one. JUnit and `results.json`
+  are unchanged.
+- **An executed XPASS or XFAIL counts as executed for the infra guard**, so a run in which an
+  xfail'd case ran beside a case skipped for missing infrastructure keeps its exit status instead
+  of reporting that nothing executed. A build-cause skip still fails the run. Halt-log records are
+  split per app node, so a record never runs from one node's log into another's.
+- **`INT_STACK_PREFIX` is checked as `SLT_STACK_PREFIX` is**: lowercase letters, digits and
+  dashes, starting with a letter or digit (`../x` or `Alt` was used as given). `SLT_STACK_PREFIX`
+  with a trailing newline is refused.
+- **A case without a `lifecycle:` block bounds its best-effort teardown**: 60 s for each step and
+  600 s for the whole teardown, the ownership ledger's bounds. A hung delete is reported as a
+  failure, which fails the case, instead of hanging the run.
+- **`checkpoint_history: {predates: …}` fails when a read after the seed shows no checkpoint.**
+  The history survives a kill restart, so an empty `interrupt` or `restored` read after a
+  non-empty `seed` read proved nothing and passed. It now fails, naming the read.
 - **Integration: one test item per variant group.** A case with variants becomes several items,
   named `case[variant]` (`case[a+b]` when variants share a service). `-m <service>` now runs only
   that service's variants. Scripts or reports that name items by id see the new ids.
@@ -59,6 +179,20 @@ the last release; the release makes it that version's entry.
 
 **New**
 
+- `assert.data`, `assert.diff` and `assert.json` accept `stable_seconds`, as `assert.file` does:
+  after every spec first passes, keep reading for N seconds, and fail on a late change. On all four
+  tiers it must be a finite number of seconds up to 2147483.647; `.inf` and `.nan` are refused at
+  load.
+- The build matrix file is named by `SLT_BUILD_MATRIX_ENV`. `FTC_PUBLISHER_RELEASES_ENV` still
+  works when the new name is unset; it is deprecated and will be removed in a later release.
+- `assert.monitor` (integration) takes `ADAPTER_DETAIL`, `LAST_BATCH_INFO` and
+  `DATABASE_WRITE_INFO` by subset; `TIME_TAKEN_FOR_MERGE` is refused as a clock.
+- Recovery evidence carries UTC times (`issuedUtc`, `deadlineUtc`, `startedUtc`, `observedUtc`)
+  beside the monotonic ones; role node faults record `appAffected` and `appStatusOnNode`.
+- `striim-test run` prints `<tier>: no tests selected` for a tier that selected nothing; beside a
+  passing tier the run still exits 0. Every `run`/`list` option has `--help` text.
+- acme-retail's `scripts/validate-example.py` checks any number of cases, deriving each case's
+  app, services and table from the case, so a case added as in PROMPTS.md step 6 passes.
 - `SLT_STRIIM_TRYOUT_JARS`: run the Docker cluster with replacement Platform or Agent jars, and
   record them in each case's evidence. See [docs/TRYOUT-JARS.md](docs/TRYOUT-JARS.md). (#53)
 - `SLT_UI_FORM`: save each component as the Flow Designer would before deploy (`replay`, or
@@ -75,13 +209,50 @@ the last release; the release makes it that version's entry.
   resume by position (#84); `INT_VARIANT_WORKERS` to drive variant groups concurrently (#87);
   `assert.monitor` for `DDL_METRICS` (exact) and `ADAPTER_BASIC` (subset) (#93); mock source
   fields up to 1600 columns (#94).
-- Integration: a case that sets both `expect_log` and `expect_error` gets a warning at load,
-  because `expect_log` is not checked there. (#82)
 - A prompt template for writing tests for an application you already have (#52); the README
   links a ParallelLoader quick start (#55).
 
 **Checks and fixes**
 
+- On mssql and teradata, `min_rows` no longer passes on an uncommitted count when the writer
+  still holds its lock at the timeout; it fails with "committed count never readable".
+- The code samples (`samples/code/op`, `samples/code/udf`) count every event and row exactly
+  (`exact:`, `events:` with `multiset:`) and prove completion with `lifecycle:`. They now run in
+  Docker mode only. `samples/live/15-fault-evidence` is folded into `14-progress-recovery`.
+- Docs: the integration comparison contract is JSON-level (boolean, integer, decimal, string;
+  decimals by value, scale ignored). Java numeric width is not compared.
+- The framework's three hermetic suites run on every pull request and push to `main`
+  (`.github/workflows/hermetic-tests.yml`: Linux, Python 3.12, no Docker, no Striim), with each
+  suite's skips listed and held to a budget (`tools/check_skips.py`). `tools/release.py` runs the
+  same three commands as `CONTRIBUTING.md`; a test keeps the three lists the same.
+- Perf items carry a marker for every service they require, so `--perf -m sqlserver` (and
+  mysql, mariadb, teradata, vertica) selects them. `inttest.cli start`/`stop` use the session's
+  compose lock under `INT_STACK_PREFIX`.
+- `tools/prepare-recovery-goldens.py` checks that the source is the stated formula, not only that
+  the copies equal it. The hermetic integration suite no longer takes, waits for or blocks the
+  real session lock in the state directory the shell names.
+- Docs: settings come from four layers (the framework clone's `.env` is read under a project
+  root, below the project's); `${TID}` is never empty in a live case; Docker mode's memory
+  settings, sample 17's `SLT_ENABLE_NODE_FAULTS=1`, `op.on_agent`, diff `fold_names`, the
+  `stop_start_cycle` defaults and the integration `expect_log`, `monitor` and `exception_store`
+  tiers are described; the by-hand build recipe computes the series of a four-part release; the
+  Teradata and ServiceNow settings say which are required and that neither has a container;
+  RUN-YOUR-FIRST-TEST.md lists every command and option.
+- Pre-flight failure reasons in the outcomes file and log no longer carry credentials in a quoted
+  key (`{"password": ...}`), a URL, an `IDENTIFIED BY` clause or any known secret value. URL
+  credentials are removed up to the last `@`, so a password containing `@` leaves no tail.
+- A `slt-image-probe-<pid>` container left by an interrupted run is removed by the next image check
+  once its process has gone, so it no longer pins the Striim image.
+- The framework's hermetic live suite no longer deletes the provision registry in the state
+  directory the shell names.
+- Framework tests: `recover:` and the `stop_start_cycle` / `service_outage` actions run
+  hermetically through the plugin; timing-sensitive tests hold on a loaded host; tests that read
+  git history skip, with the reason, outside a git checkout (`git_checkout` marker); the gallery
+  gate's tier list must equal the loader's; and `pgclient`, `dbroutes`, `gcsadmin` and
+  `uibrowser` have hermetic tests. Tests only; no behaviour change.
+- A file read that catches the last event mid-write is polled again. A torn event with complete
+  nested objects (`data`, `metadata`) was raised as a corrupt JSON stream on the first poll,
+  ending the poll with no record; the exact-file route had the same check.
 - The `vertica-admin` route keeps the server's search path. (#57)
 - Spanner `ARRAY<JSON>` and `jsonb[]` elements are read as JSON, not `{}`. (#63)
 - gRPC's fork log line no longer fails a Spanner or BigQuery case's inventory listing. (#61)

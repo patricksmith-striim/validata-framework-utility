@@ -28,6 +28,104 @@ after the upgrade rebuilds each OP and UDF jar once, so allow for the Maven time
 jar is rebuilt when its source, pom, parent pom, an added source root (`FieldCommon`) or a deleted
 file changes, in both engines.
 
+### Data and file `match:` without a count
+
+A data or file `match:` with no `rows:`, `ordered: true`, `events:`, `multiset: true` or
+`exact:` now warns at load (`striim-test doctor` lists it) and is refused in a `recover:` case.
+Add `rows: N`, counting the golden's rows by hand, or `exact:`. A `rows: 0` spec needs a positive
+spec on the same route, a `lifecycle:` block or `expect_halt: true`.
+
+### `assert.json` array order (breaking)
+
+Arrays are compared in order, and `1` no longer equals `1.0`. If a json spec over aggregated child
+rows starts failing on order, add `unordered:` with the array paths the failure names. A golden
+with two rows for one key is refused.
+
+### Monitor, jmx and gcs specs that only bound
+
+A `monitor`, `jmx` or `gcs` spec with no positive figure (only `max` bounds, zeros, `false`,
+`absent`, or an empty object) now holds until `timeout`, so such a case takes its full timeout.
+A monitor spec with `{absent: true}` needs a positive figure beside it.
+
+### `project: userdata` goldens (breaking)
+
+A file spec with `project: userdata` now compares events the enricher did not stamp. If your
+output includes events with no userdata, the golden needs an all-`<absent>` row, with `keys:`
+on the spec.
+
+### Apps left crashed, and teardown that cannot delete (breaking)
+
+A case whose app is in CRASH, HALT, TERMINATED or DEPLOY_FAILED after its last assertion now
+fails, smoke-only cases included. A case without `lifecycle:` fails when its teardown cannot
+delete what it created. Read the failure; it names the app status or the object.
+
+### Stop cycles and recovery
+
+`stop_start_cycle` waits for each STOP to settle and fails the case if it does not. A `recover:`
+STOP or QUIESCE that leaves the app in CRASH or HALT fails the case instead of restarting it.
+
+### Module builds and prebuilt jars (breaking)
+
+A live or integration run in which a case skipped because its module could not be built (no
+`mvn`, JDK or `STRIIM_HOME`) now fails, even when other cases passed. A prebuilt jar you name with
+`SLT_PREBUILT_*` that cannot be used fails the case in both engines. Install what the reason
+names, or leave those cases out of the run.
+
+### Integration `requires:`, `expect_error` and top-level keys (breaking)
+
+An integration case is refused at load when it has a top-level key the loader does not read, a
+`requires:` service that no services root defines, or an `expect_error` that renders empty or to
+a bare word such as `Exception`. A live `service.yaml` with an unknown key is refused when the
+service loads. Run `striim-test doctor --case <dir>`; each refusal names the key or service.
+
+### Perf `target:` iterations
+
+A perf `target:` iteration fails when the writer acknowledged none of the window's events or
+published `PROCESSED` 0. A case that measured nothing used to pass.
+
+### Build matrix setting renamed
+
+If you set `FTC_PUBLISHER_RELEASES_ENV`, rename it to `SLT_BUILD_MATRIX_ENV`. The old name is read
+only when the new one is unset, and will be removed in a later release.
+
+### Shared integration services stay up
+
+Under `SLT_INFRA_OWNERSHIP=shared`, an integration session no longer takes down the services it
+started. If a script relied on that teardown, stop them yourself (`inttest.cli stop`).
+
+### Recovery and action STOPs that leave the app broken (breaking)
+
+A `recover:` with `expect_running: false` now requires the app to settle stopped (CREATED,
+DEPLOYED, STOPPED or QUIESCED). A crash or halt during the post-recover settle or the gap between
+cycles fails the case, and so does an `alter_recompile` or `drop_recreate_app` STOP or QUIESCE
+that crashes a RUNNING app. Read the failure; it names the status.
+
+### `timeout:` and integration load-time refusals (breaking)
+
+A `timeout:` that is not a number (`90s`) is refused at load. An integration case is refused when
+it sets `expect_log` beside `expect_error` or on a smoke-only case, and fails when its
+`assert.data` input holds no events. `assert.target` rows compare typed. A perf case with a
+top-level `timeout:` is refused; move the value to `performance.timeout`. An `INT_VARIANT` that
+names no variant is a usage error. Run `striim-test doctor --case <dir>` on your cases.
+
+### `sync-framework.py` inside the framework checkout
+
+The script now refuses to run inside the framework checkout unless `--home` or
+`FRAMEWORK_CHECKOUT` names one. Copy the new script from the template into your repo.
+
+### Bare `expect_halt`, refused manifests and xfail outcomes
+
+Set `expect_halt_contains` on every `expect_halt: true` case; the bare form is deprecated and a
+later release refuses it. The substring must appear in a log record naming the case's namespace.
+A manifest the loader refuses now stops collection (exit 2) even when `-m` would not select it, so
+fix or remove it. Tools that read `.slt.json` or `evidence.json` see `xfailed` and `xpassed` where
+they saw `skipped` and `passed`.
+
+### `INT_STACK_PREFIX` values
+
+`INT_STACK_PREFIX` must now be lowercase letters, digits and dashes, starting with a letter or
+digit, as `SLT_STACK_PREFIX` already had to be. Rename a prefix that is refused.
+
 ### Integration item ids (breaking)
 
 A case with variants now runs as one item per variant group, `case[variant]`. Update anything
