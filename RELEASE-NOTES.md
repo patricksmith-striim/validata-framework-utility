@@ -178,6 +178,21 @@ the last release; the release makes it that version's entry.
 - **The Docker Striim image runs with `LANG`/`LC_ALL` `C.UTF-8`**, so the JVM writes non-Latin
   text correctly. (#76)
 
+- **`livetest.cli stop` refuses while another live run uses the stack.** A stop is `down -v`
+  (databases, volumes, the Striim MDR). It now exits 2 while another live session is registered
+  on the stack's Striim endpoint (a live shared marker, or a live exclusive run other than the
+  caller's), naming their pids and the same command with `--force`, which stops anyway. With no
+  other live session the stop runs as before. `livetest.preflight --restart-app-nodes` under
+  `shared` refuses the same way.
+- **A failed integration teardown fails the session.** At session end a `compose down` that fails,
+  or leaves a same-named container behind, sets exit status 1 (case results stand), and the
+  service stays in `.int-services-up.json` so the next session tears it down. Before, it was a
+  printed warning and the record was dropped.
+- **Integration session and compose locks are machine-wide** (`<SLT_LOCK_DIR>/.int-session.lock`
+  and `.int-compose.lock`, prefixed by `INT_STACK_PREFIX`). Two checkouts, or two `SLT_STATE_DIR`
+  values, on one integration stack are now one stack: a second session is refused instead of
+  taking down the first one's containers.
+
 **New**
 
 - `assert.data`, `assert.diff` and `assert.json` accept `stable_seconds`, as `assert.file` does:
@@ -219,6 +234,11 @@ the last release; the release makes it that version's entry.
   fields up to 1600 columns (#94).
 - A prompt template for writing tests for an application you already have (#52); the README
   links a ParallelLoader quick start (#55).
+
+- `SLT_SHARED_PROVISION=0`: under `shared`, a missing service is not started; the case fails and
+  names `python -m livetest.cli start <service>`. Unset or `1` keeps today's behaviour. Meant for
+  lanes that must never start a shared service. `livetest.cli stop --force` overrides the new stop
+  refusal.
 
 **Checks and fixes**
 
@@ -273,6 +293,15 @@ the last release; the release makes it that version's entry.
   an extra emitted event, an unexpected emitted key). Tests only; no behaviour change.
 - Internal: the paths core block carries `SLT_STRIIM_TRYOUT_JARS` in both engines, and the
   settings reference and a fault-evidence test are fixed. (#58, #59, #68, #91)
+
+- Shared markers: the pre-flight entry points (`livetest.preflight`, `livetest.cli start`) remove
+  their marker before returning; a marker records its process start time, and a marker of a dead
+  or reused pid is removed whenever the endpoint registry is read. An earlier release's marker
+  (no start time) counts only while its pid's process started before the marker was written.
+- Shared service adapter: a provision record whose container is no longer running no longer turns
+  the bring-up into a no-op reported as `provisioned-and-kept`; the record is dropped and the
+  container started. One provisioning lock per container, so a fast service no longer waits
+  behind a slow one's cold start.
 
 ## v0.3.2 (2026-10-27)
 

@@ -148,6 +148,28 @@ to your repo's `.gitignore`, or set `SLT_CASE_RECORDS` to another directory or t
 is not read in full. Times on large tables are smaller. Do not compare `elapsed_s` across this
 upgrade.
 
+### Stopping a shared stack (breaking)
+
+`python -m livetest.cli stop` now exits 2 while another live run uses the stack, and names its
+pids. A script that tears an environment down should treat a non-zero exit as "still in use",
+wait, and retry; add `--force` only when the named sessions are known to be gone or expendable.
+A marker left by an earlier release counts only while its pid still belongs to the process that
+wrote it, so stale markers do not block a stop. `livetest.preflight --restart-app-nodes` under
+`shared` refuses the same way.
+
+### Integration teardown and locks (breaking)
+
+A failed integration teardown now fails the session (exit 1) and keeps the service in
+`.int-services-up.json` for the next session to tear down. The session and compose locks moved
+from the state dir to `SLT_LOCK_DIR` (default `/tmp/slt-locks`), so two checkouts on one
+`INT_STACK_PREFIX` can no longer run sessions side by side; give each its own `INT_STACK_PREFIX`
+if they must.
+
+### `SLT_SHARED_PROVISION`
+
+New. `0` makes a shared run fail a case whose service is not running instead of starting it, and
+names the start command. Leave it unset (or `1`) to keep today's behaviour.
+
 ## v0.3.2
 
 ### Whole-number decimals in integration goldens (breaking)
