@@ -11,6 +11,8 @@ from livetest.preflight import (
     provision as preflight_provision,
     provision_cluster as preflight_provision_cluster,
     provision_services as preflight_provision_services,
+    stop_command as preflight_stop_command,
+    stop_refused as preflight_stop_refused,
     teardown as preflight_teardown,
     teardown_cluster as preflight_teardown_cluster,
     teardown_services as preflight_teardown_services,
@@ -98,22 +100,27 @@ def cmd_up(targets: list) -> int:
     return cluster_rc or services_rc or tests_rc
 
 
-def cmd_down(targets: list) -> int:
+def cmd_down(targets: list, force: bool = False) -> int:
     _as_coordinator()
     services, test_ids, cluster = _resolve_targets(targets)
+    # Checked once for the whole command, so a refusal names the one command that stops it all
+    # anyway; each half checks again (a session may have joined meanwhile). --force skips both.
+    if not force and preflight_stop_refused(os.environ, retry=preflight_stop_command(targets)):
+        return 2
+    kw = {"force": True} if force else {}
     # Every half runs, whatever the others returned, and the worst rc wins: a teardown that
     # gives up at the first failure strands exactly the containers it was asked to remove
     # (same rule as _take_down_services). Cluster last -- tearing the engine down first would
     # leave the service teardown talking to a half-gone stack.
-    rc = preflight_teardown_services(services) if services else 0
+    rc = preflight_teardown_services(services, **kw) if services else 0
     # explicit=True: a typed `stop` is not end-of-run cleanup (see preflight.teardown). This
     # tears down that test's SERVICES, so it belongs on the service side of the cluster --
     # `stop striim <test-id>` used to run it after the engine was already gone, the exact
     # ordering the rule above forbids.
     if test_ids:
-        rc = preflight_teardown(test_ids, explicit=True) or rc
+        rc = preflight_teardown(test_ids, explicit=True, **kw) or rc
     if cluster:
-        rc = preflight_teardown_cluster() or rc
+        rc = preflight_teardown_cluster(**kw) or rc
     return rc
 
 
@@ -171,6 +178,8 @@ def main() -> int:
     down = sub.add_parser("stop", help="stop service(s), 'all', or a test id's full pre-flight")
     down.add_argument("target", nargs="+",
                       help=f"service name(s) {all_services()}, {CLUSTER!r}, 'all', or a test id")
+    down.add_argument("--force", action="store_true",
+                      help="stop even while other live sessions use the stack (it is refused otherwise)")
 
     gg = sub.add_parser("ggtrail", help="generate GoldenGate trail files from a workload.yaml")
     gg.add_argument("--workload", required=True, help="workload.yaml describing schema + workload")
@@ -187,7 +196,7 @@ def main() -> int:
     if args.cmd == "start":
         return cmd_up(args.target)
     if args.cmd == "stop":
-        return cmd_down(args.target)
+        return cmd_down(args.target, force=args.force)
     if args.cmd == "ggtrail":
         return cmd_ggtrail(args)
     return 1

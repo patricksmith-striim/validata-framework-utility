@@ -1796,7 +1796,10 @@ or the shell, and a run without it is refused.
   unhealthy, restarting or paused, or stopped and from another checkout's compose project, fails
   the case instead of being recreated; the message names the owning checkout. To fix it, run
   `python -m inttest.cli stop <service>` and then `start <service>` from that checkout, once
-  nothing else uses the service.
+  nothing else uses the service. `python -m livetest.cli stop` refuses (exit 2) while another live
+  run uses the stack, naming its pids; add `--force` to stop anyway. With
+  `SLT_SHARED_PROVISION=0` a missing service is not started: the case fails, naming the
+  `livetest.cli start` command.
 - **`exclusive`**: the run starts a stack of its own, refuses to start when anything already answers
   on its Striim endpoint, and tears the stack down at the end unless `SLT_KEEP_SERVICES=1`. With
   `--parallel` the controller tears down what its workers started.
@@ -1804,7 +1807,8 @@ or the shell, and a run without it is refused.
 When an OP deploy fails because the cluster's OP class loader is poisoned (`invalid LOC header`
 in the server log since the case started), only an `exclusive` serial run restarts the app nodes
 and retries. Any other run fails the case with `[slt-op-poisoned]`; restart the app nodes with
-`python -m livetest.preflight --restart-app-nodes` once nothing else runs on the cluster.
+`python -m livetest.preflight --restart-app-nodes` once nothing else runs on the cluster. Under
+`shared` that command refuses (exit 2) while another live run is registered on the cluster.
 
 `recover: {mode: kill}` kills every app-node container when `node:` is absent, so on a shared cluster it kills the other
 tests running there too. Give such a test `disabled_parallel:`, and do not run it on a cluster others

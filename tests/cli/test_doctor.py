@@ -1152,6 +1152,13 @@ def test_a_dotenv_tryout_setting_reaches_the_tier_child(proj):
         "both:/j/Platform-1.0.0-SNAPSHOT.jar"
 
 
+def test_a_dotenv_shared_provision_setting_reaches_the_tier_child(proj):
+    # A lane writes SLT_SHARED_PROVISION=0 into its .env; the engines read it from their environment.
+    from striim_test import dispatch
+    (proj / ".env").write_text("SLT_SHARED_PROVISION=0\n")
+    assert dispatch.service_env({"SLT_PROJECT_ROOT": str(proj)})["SLT_SHARED_PROVISION"] == "0"
+
+
 def test_doctor_runs_the_tryout_check(proj):
     checks = doctor.run_checks({"SLT_PROJECT_ROOT": str(proj), "STRIIM_URL": "http://s:9080",
                                 "SLT_STRIIM_TRYOUT_JARS": "Platform.jar"}, REPO, probe=AUTH_OK)

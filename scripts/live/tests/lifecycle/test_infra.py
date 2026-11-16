@@ -932,8 +932,7 @@ def test_resolve_service_two_processes_different_state_dirs_provision_once(tmp_p
 
 def test_resolve_service_parallel_branch_no_recursive_lock(monkeypatch, tmp_path):
     from livetest import services
-    assert services._PROVISION_LOCK != ".slt-shared-provision.lock"
-    assert services._PROVISION_LOCK != infra.SHARED_PROVISION_LOCK
+    assert services._PROVISION_LOCK != infra.shared_provision_lock("slt-postgres")
     monkeypatch.setenv("SLT_PARALLEL", "1")
     monkeypatch.setattr(services, "_state_dir", lambda: tmp_path / "state")
     (tmp_path / "state").mkdir()
@@ -959,7 +958,8 @@ def test_resolve_service_lock_timeout_is_bounded_failure(tmp_path):
     holder = subprocess.Popen(
         [sys.executable, "-c",
          "import sys, time; from filelock import FileLock; l = FileLock(sys.argv[1]); l.acquire(); "
-         "print('locked', flush=True); time.sleep(30)", str(tmp_path / "locks" / infra.SHARED_PROVISION_LOCK)],
+         "print('locked', flush=True); time.sleep(30)",
+         str(tmp_path / "locks" / infra.shared_provision_lock("slt-postgres"))],
         env=_child_env(tmp_path), stdout=subprocess.PIPE, text=True)
     (tmp_path / "locks").mkdir(exist_ok=True)
     try:
@@ -988,7 +988,7 @@ def test_resolve_service_exclusive_passes_through(tmp_path):
                                 container_running=lambda c: pytest.fail("exclusive never probes containers"))
     assert out == "r" and calls == ["postgres"]
     assert decl.services == [{"name": "postgres", "container": "xabc-slt-postgres", "status": "owned"}]
-    assert not (tmp_path / "locks" / infra.SHARED_PROVISION_LOCK).exists()
+    assert not (tmp_path / "locks" / infra.shared_provision_lock("xabc-slt-postgres")).exists()
     legacy = []
     assert infra.resolve_service(None, "postgres", {}, set(),
                                  lambda name, env, started, progress=None: legacy.append(name) or "l") == "l"

@@ -13,6 +13,13 @@ import pytest
 from livetest import cli
 
 
+@pytest.fixture(autouse=True)
+def _private_lock_dir(monkeypatch, tmp_path):
+    """`stop` reads the machine-wide ownership registry: a private lock dir, never /tmp/slt-locks."""
+    from livetest import stack
+    monkeypatch.setattr(stack, "_LOCK_DIR", tmp_path / "locks")
+
+
 def test_service_names_resolve_to_services(monkeypatch):
     monkeypatch.setattr(cli, "all_services", lambda: ["gcs", "postgres"])
     monkeypatch.setattr(cli, "known_test_ids", set)
@@ -319,7 +326,7 @@ def test_stop_runs_with_the_dotenv_prefix_in_its_environment(tmp_path, monkeypat
     monkeypatch.delenv("SLT_STACK_PREFIX", raising=False)
     monkeypatch.delenv("GOLD_TARGETS", raising=False)
     seen = []
-    monkeypatch.setattr(cli, "cmd_down", lambda targets: seen.append((targets, os.environ.get("SLT_STACK_PREFIX"))) or 0)
+    monkeypatch.setattr(cli, "cmd_down", lambda targets, force=False: seen.append((targets, os.environ.get("SLT_STACK_PREFIX"))) or 0)
     monkeypatch.setattr("sys.argv", ["livetest.cli", "stop", "striim", "postgres"])
     assert cli.main() == 0
     assert seen == [(["striim", "postgres"], "review-a")]

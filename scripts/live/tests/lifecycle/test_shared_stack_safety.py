@@ -1,0 +1,382 @@
+"""Shared-stack safety.
+
+A stop is refused while another live session uses the stack, naming the pids and the `--force` command;
+the console's app-node restart is refused on a shared cluster other sessions use; the pre-flight entry
+points release their markers, and a marker of a dead or reused pid is pruned; the shared adapter brings a
+dead container with a provision record up again and, under SLT_SHARED_PROVISION=0, refuses to start a
+missing service; one shared provisioning lock per container.
+
+Docker is always faked. Another session is a real child process, so its pid and start time are real.
+"""
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+import time
+from types import SimpleNamespace as NS
+
+import psutil
+import pytest
+from filelock import FileLock
+
+from livetest import cli, infra, preflight, services
+
+PORT = 9080
+SHARED = {"SLT_INFRA_OWNERSHIP": "shared", "SLT_KEEP_SERVICES": "1"}
+
+
+@pytest.fixture
+def other():
+    """The pid of a live process standing for another session."""
+    p = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+    try:
+        yield p.pid
+    finally:
+        p.kill()
+        p.wait()
+
+
+def _shared_dir():
+    return infra._shared_dir(infra._lock_dir(), PORT)
+
+
+def _marker(pid, text=None):
+    """A shared marker as a session of this framework writes it, or with ``text`` as its content."""
+    d = _shared_dir()
+    d.mkdir(parents=True, exist_ok=True)
+    path = d / str(pid)
+    path.write_text(text if text is not None else
+                    json.dumps({"pid": pid, "runId": "", "started": psutil.Process(pid).create_time()}))
+    return path
+
+
+def _dead_pid() -> int:
+    p = subprocess.Popen([sys.executable, "-c", "pass"])
+    p.wait()
+    return p.pid
+
+
+def _logs(monkeypatch) -> list:
+    logs = []
+    monkeypatch.setattr(preflight, "_log", logs.append)
+    return logs
+
+
+def _fake_service_down(monkeypatch) -> list:
+    downs = []
+    monkeypatch.setattr(preflight, "compose_down", lambda defn: downs.append(defn.name))
+    monkeypatch.setattr(preflight, "_surviving_containers", lambda defn: [])
+    monkeypatch.setattr(preflight, "forget_provisioned", lambda *a, **k: None)
+    return downs
+
+
+def _fake_cluster(monkeypatch) -> list:
+    calls = []
+    monkeypatch.setattr(preflight, "_resolve_release", lambda cfg: {"STRIIM_VERSION": "5.4.2"})
+    monkeypatch.setattr(preflight._sp, "cluster_has_containers", lambda d, r=None: True)
+    monkeypatch.setattr(preflight._sp, "cluster_down", lambda d, r=None: calls.append("down -v"))
+    return calls
+
+
+# ------------------------------------------------------------------ stop with other live sessions
+
+@pytest.mark.parametrize("env", [SHARED, {}], ids=["shared", "undeclared"])
+def test_stop_of_a_service_is_refused_while_another_session_uses_the_stack(monkeypatch, other, env):
+    _marker(other)
+    downs, logs = _fake_service_down(monkeypatch), _logs(monkeypatch)
+    assert preflight.teardown_services(["postgres"], dict(env)) == 2
+    assert downs == []                                         # no `down -v`
+    assert str(other) in logs[-1]
+    assert "python -m livetest.cli stop postgres --force" in logs[-1]
+    assert preflight.teardown_services(["postgres"], dict(env), force=True) == 0
+    assert downs == ["postgres"]
+
+
+def test_stop_of_the_cluster_is_refused_while_another_session_uses_it(monkeypatch, other):
+    for k, v in SHARED.items():
+        monkeypatch.setenv(k, v)
+    _marker(other)
+    calls, logs = _fake_cluster(monkeypatch), _logs(monkeypatch)
+    assert preflight.teardown_cluster() == 2
+    assert calls == []
+    assert str(other) in logs[-1] and "python -m livetest.cli stop striim --force" in logs[-1]
+    assert preflight.teardown_cluster(force=True) == 0
+    assert calls == ["down -v"]
+
+
+def test_an_explicit_stop_of_a_test_id_is_refused_too(monkeypatch, other):
+    _marker(other)
+    logs, taken = _logs(monkeypatch), []
+    monkeypatch.setattr(preflight, "manifests_for", lambda ids: [])
+    monkeypatch.setattr(preflight, "compute_unions", lambda ms: (["postgres", "oracle"], []))
+    monkeypatch.setattr(preflight, "_take_down_services",
+                        lambda svcs, env, apply_gate=True: taken.extend(svcs) or [])
+    assert preflight.teardown(["some-test"], dict(SHARED), explicit=True) == 2
+    assert taken == []
+    assert str(other) in logs[-1] and "python -m livetest.cli stop some-test --force" in logs[-1]
+    assert preflight.teardown(["some-test"], dict(SHARED), explicit=True, force=True) == 0
+    assert taken == ["postgres", "oracle"]
+
+
+def test_with_no_other_live_session_a_stop_proceeds_and_dead_markers_are_pruned_first(monkeypatch):
+    dead = _marker(_dead_pid(), "{}")                          # an old-format marker of a finished session
+    own = _marker(os.getpid())                                 # this process is not "another session"
+    downs = _fake_service_down(monkeypatch)
+    assert preflight.teardown_services(["postgres"], dict(SHARED)) == 0
+    assert downs == ["postgres"]
+    assert not dead.exists() and own.exists()
+
+
+def test_a_live_exclusive_run_refuses_a_stop_and_its_leftover_does_not(monkeypatch, other):
+    lease = infra._exclusive_lease_path(infra._lock_dir(), PORT)
+    owner = lease.parent / (lease.name + ".owner")
+    owner.write_text(json.dumps({"runId": "run-x", "pid": other}))
+    downs, logs = _fake_service_down(monkeypatch), _logs(monkeypatch)
+    assert preflight.teardown_services(["postgres"], {"SLT_INFRA_OWNERSHIP": "exclusive"}) == 2
+    assert "exclusive run run-x" in logs[-1] and str(other) in logs[-1]
+    # the run's own stop (same run id) is not refused by itself
+    assert preflight.teardown_services(["postgres"], {"SLT_RUN_EPOCH": "run-x"}) == 0
+    owner.write_text(json.dumps({"runId": "run-x", "pid": _dead_pid()}))     # a leftover: nothing alive
+    assert preflight.teardown_services(["postgres"], {"SLT_INFRA_OWNERSHIP": "exclusive"}) == 0
+    assert downs == ["postgres", "postgres"]
+
+
+def test_cli_stop_refuses_once_with_the_whole_command_and_force_skips_the_check(monkeypatch, other, capsys):
+    _marker(other)
+    monkeypatch.setattr(cli, "all_services", lambda: ["postgres"])
+    monkeypatch.setattr(cli, "known_test_ids", set)
+    calls = []
+    monkeypatch.setattr(cli, "preflight_teardown_services", lambda names, **kw: calls.append(("svc", kw)) or 0)
+    monkeypatch.setattr(cli, "preflight_teardown_cluster", lambda **kw: calls.append(("cluster", kw)) or 0)
+    assert cli.cmd_down(["postgres", "striim"]) == 2
+    out = capsys.readouterr().out
+    assert calls == []
+    assert str(other) in out and "python -m livetest.cli stop postgres striim --force" in out
+    assert cli.cmd_down(["postgres", "striim"], force=True) == 0
+    assert calls == [("svc", {"force": True}), ("cluster", {"force": True})]
+
+
+def test_cli_stop_accepts_force(monkeypatch):
+    from livetest import project
+    seen = {}
+    monkeypatch.setattr(project, "load_and_activate", lambda: None)
+    monkeypatch.setattr(cli, "_adopt_stack_prefix", lambda env=None: None)
+    monkeypatch.setattr(cli, "cmd_down", lambda targets, force=False: seen.update(t=targets, f=force) or 0)
+    monkeypatch.setattr(sys, "argv", ["livetest.cli", "stop", "postgres", "striim", "--force"])
+    assert cli.main() == 0
+    assert seen == {"t": ["postgres", "striim"], "f": True}
+
+
+# ------------------------------------------------------------------ restart on a shared cluster
+
+def _fake_restart(monkeypatch) -> list:
+    restarted = []
+    monkeypatch.setattr(preflight, "_resolve_striim",
+                        lambda cfg: NS(url="http://localhost:9080", user="admin", password="x", mode="docker"))
+    monkeypatch.setattr(preflight.StriimClient, "from_url", classmethod(lambda cls, *a, **k: object()))
+    monkeypatch.setattr(preflight._sp, "restart_app_nodes", lambda client: restarted.append("restart"))
+    return restarted
+
+
+def test_restart_app_nodes_is_refused_on_a_shared_cluster_other_sessions_use(monkeypatch, other):
+    for k, v in SHARED.items():
+        monkeypatch.setenv(k, v)
+    _marker(other)
+    restarted, logs = _fake_restart(monkeypatch), _logs(monkeypatch)
+    assert preflight.restart_app_nodes() == 2
+    assert restarted == []
+    assert str(other) in logs[-1]
+    assert not (_shared_dir() / str(os.getpid())).exists()     # its own marker is released too
+
+
+def test_restart_app_nodes_runs_on_a_shared_cluster_no_other_session_uses(monkeypatch):
+    for k, v in SHARED.items():
+        monkeypatch.setenv(k, v)
+    restarted = _fake_restart(monkeypatch)
+    assert preflight.restart_app_nodes() == 0
+    assert restarted == ["restart"]
+
+
+# ------------------------------------------------------------------ markers released and pruned
+
+def _stub_provision(monkeypatch, seen):
+    def resolve_striim(cfg):
+        seen.append((_shared_dir() / str(os.getpid())).exists())   # declared while it works
+        return None
+    monkeypatch.setattr(preflight, "_resolve_striim", resolve_striim)
+    monkeypatch.setattr(preflight, "_resolve_release", lambda cfg: {})
+    monkeypatch.setattr(preflight, "manifests_for", lambda ids: [NS(requires=[], topology="single")])
+    monkeypatch.setattr(preflight, "compute_unions", lambda ms: ([], []))
+    monkeypatch.setattr(preflight, "clear_provision_registry", lambda d: None)
+
+    def bring_up(*a, **k):
+        seen.append((_shared_dir() / str(os.getpid())).exists())
+        return {}
+    monkeypatch.setattr(preflight, "_bring_up_services", bring_up)
+    monkeypatch.setattr(preflight, "_prune_dead_records", lambda names: None)
+
+
+@pytest.mark.parametrize("entry, call", [
+    ("provision", lambda: preflight.provision(["t"])),
+    ("provision_cluster", lambda: preflight.provision_cluster()),
+    ("provision_services", lambda: preflight.provision_services(["postgres"])),
+    ("restart_app_nodes", lambda: preflight.restart_app_nodes()),
+])
+def test_preflight_entry_points_release_their_declaration(monkeypatch, entry, call):
+    for k, v in SHARED.items():
+        monkeypatch.setenv(k, v)
+    seen = []
+    _stub_provision(monkeypatch, seen)
+    call()
+    assert seen == [True]                                      # the marker existed while it worked
+    assert not (_shared_dir() / str(os.getpid())).exists()     # and is gone once it returned
+
+
+def test_provision_services_releases_its_declaration_when_the_bring_up_raises(monkeypatch):
+    for k, v in SHARED.items():
+        monkeypatch.setenv(k, v)
+    monkeypatch.setattr(preflight, "_prune_dead_records", lambda names: None)
+
+    def boom(*a, **k):
+        raise RuntimeError("docker is down")
+    monkeypatch.setattr(preflight, "_bring_up_services", boom)
+    assert preflight.provision_services(["postgres"]) == 1
+    assert not (_shared_dir() / str(os.getpid())).exists()
+
+
+def test_a_shared_marker_records_its_process_start_time():
+    decl = infra.declare(dict(SHARED, SLT_RUN_EPOCH="r"))
+    try:
+        record = json.loads((_shared_dir() / str(os.getpid())).read_text())
+        assert record["started"] == psutil.Process(os.getpid()).create_time()
+    finally:
+        decl.release()
+
+
+def test_a_shared_declaration_prunes_dead_markers():
+    dead = _marker(_dead_pid(), "{}")
+    decl = infra.declare(dict(SHARED))
+    decl.release()
+    assert not dead.exists()
+
+
+def test_a_reused_pid_is_not_a_live_session(monkeypatch, other):
+    path = _marker(other, json.dumps({"pid": other, "started": psutil.Process(other).create_time() - 1000}))
+    assert infra._live_shared_markers(infra._lock_dir(), PORT, infra._pid_alive) == []
+    assert not path.exists()                                   # pruned under the registry lock
+    _marker(other, json.dumps({"pid": other, "started": psutil.Process(other).create_time() - 1000}))
+    decl = infra.declare({"SLT_INFRA_OWNERSHIP": "exclusive", "SLT_RUN_EPOCH": "r"},
+                         run=lambda argv: NS(stdout="", returncode=0))
+    decl.release()                                             # an exclusive run is no longer refused
+    _marker(other, json.dumps({"pid": other, "started": psutil.Process(other).create_time() - 1000}))
+    swept = []
+    preflight._sweep_postgres_slots(NS(sweep_stale_replication_slots=lambda log: swept.append(1)),
+                                    infra.Infra("shared", PORT, infra._lock_dir()))
+    assert swept == [1]                                        # and the slot sweep is not skipped
+
+
+def test_an_old_format_marker_older_than_its_pids_process_is_stale(other):
+    """Rule for a marker without a start time: its writer was running when it was written, so a process that
+    started after the marker's file time (a reused pid, or anything after a reboot) is not its writer."""
+    path = _marker(other, "{}")
+    began = psutil.Process(other).create_time()
+    os.utime(path, (began - 3600, began - 3600))
+    assert infra._live_shared_markers(infra._lock_dir(), PORT, infra._pid_alive) == []
+    assert not path.exists()
+
+
+def test_an_old_format_marker_of_a_still_running_writer_still_counts(monkeypatch, other):
+    _marker(other, json.dumps({"pid": other, "runId": ""}))        # as b649f9f wrote it, while `other` ran
+    assert infra._live_shared_markers(infra._lock_dir(), PORT, infra._pid_alive) == [other]
+    downs, _logs_ = _fake_service_down(monkeypatch), _logs(monkeypatch)
+    assert preflight.teardown_services(["postgres"], dict(SHARED)) == 2
+    assert downs == []
+
+
+# ------------------------------------------------------------------ the shared adapter
+
+def test_a_dead_container_with_a_provision_record_is_brought_up_again(monkeypatch, tmp_path):
+    monkeypatch.setenv("SLT_PARALLEL", "1")
+    (tmp_path / "state").mkdir()
+    monkeypatch.setattr(services, "_state_dir", lambda: tmp_path / "state")
+    defn = services.load_service("postgres")
+    reg, _ = services._provision_state_paths()
+    reg.write_text(json.dumps({defn.container: "1"}))
+    ups = []
+    inf = infra.Infra("shared", PORT, infra._lock_dir())
+    res = infra.resolve_service(
+        inf, "postgres", dict(os.environ), set(),
+        lambda n, e, s, progress=None: services.resolve(n, e, s, compose_up=lambda d: ups.append(d.name),
+                                                        post_up=lambda d: None),
+        container_running=lambda c: False)
+    assert ups == ["postgres"]                                 # `compose up` ran
+    assert inf.services == [{"name": "postgres", "container": defn.container, "status": "provisioned-and-kept"}]
+    assert res.started is True
+    assert json.loads(reg.read_text()) == {defn.container: "1"}
+
+
+def _defn(container="slt-postgres"):
+    return NS(container=container, live_override_env=None)
+
+
+def test_shared_provision_0_refuses_a_missing_service_and_names_the_start_command():
+    inf = infra.Infra("shared", PORT, infra._lock_dir())
+    with pytest.raises(infra.InfraOwnershipError,
+                       match=r"SLT_SHARED_PROVISION=0.*start it with: SLT_STACK_PREFIX=alt "
+                             r"python -m livetest\.cli start postgres$"):
+        infra.resolve_service(inf, "postgres", {"SLT_SHARED_PROVISION": "0", "SLT_STACK_PREFIX": "alt"}, set(),
+                              lambda *a, **k: pytest.fail("a missing service was started"),
+                              load=lambda n: _defn("alt-slt-postgres"), container_running=lambda c: False,
+                              forget=lambda *a, **k: pytest.fail("nothing is forgotten"))
+    assert inf.services == []
+    started = set()
+    assert infra.resolve_service(inf, "postgres", {"SLT_SHARED_PROVISION": "0"}, started, lambda *a, **k: "r",
+                                 load=lambda n: _defn(), container_running=lambda c: True) == "r"
+    assert inf.services == [{"name": "postgres", "container": "slt-postgres", "status": "reused"}]
+
+
+@pytest.mark.parametrize("env", [{"SLT_PARALLEL": "1"}, {"SLT_PARALLEL": "1", "SLT_SHARED_PROVISION": "1"}])
+def test_by_default_a_shared_run_starts_a_missing_service(env):
+    inf, forgotten, ran = infra.Infra("shared", PORT, infra._lock_dir()), [], []
+    infra.resolve_service(inf, "postgres", env, set(), lambda *a, **k: ran.append(1),
+                          load=lambda n: _defn(), container_running=lambda c: False,
+                          forget=lambda keys, timeout=-1: forgotten.append(keys))
+    assert ran == [1] and forgotten == [["slt-postgres", "postgres-setup"]]
+    assert inf.services[0]["status"] == "provisioned-and-kept"
+
+
+def test_a_serial_shared_run_does_not_touch_the_provision_registry():
+    inf, ran = infra.Infra("shared", PORT, infra._lock_dir()), []
+    infra.resolve_service(inf, "postgres", {}, set(), lambda *a, **k: ran.append(1), load=lambda n: _defn(),
+                          container_running=lambda c: False,
+                          forget=lambda *a, **k: pytest.fail("a serial run reads no provision registry"))
+    assert ran == [1]
+
+
+def test_shared_provision_takes_only_1_or_0():
+    with pytest.raises(infra.InfraOwnershipError, match="SLT_SHARED_PROVISION='yes' is not an accepted value"):
+        infra.resolve_service(infra.Infra("shared", PORT, infra._lock_dir()), "postgres",
+                              {"SLT_SHARED_PROVISION": "yes"}, set(), lambda *a, **k: pytest.fail("resolved"),
+                              load=lambda n: _defn(), container_running=lambda c: False)
+
+
+# ------------------------------------------------------------------ one lock per service container
+
+def test_one_services_provisioning_lock_does_not_block_another():
+    held = FileLock(str(infra._lock_dir() / infra.shared_provision_lock("slt-oracle")))
+    held.acquire()                                             # another lane cold-starting oracle
+    try:
+        inf = infra.Infra("shared", PORT, infra._lock_dir())
+        assert infra.resolve_service(inf, "postgres", {}, set(), lambda *a, **k: "r", load=lambda n: _defn(),
+                                     container_running=lambda c: True, lock_timeout=0.2) == "r"
+        oracle = infra.Infra("shared", PORT, infra._lock_dir())
+        t0 = time.monotonic()
+        with pytest.raises(infra.InfraOwnershipError, match="lock-timeout"):
+            infra.resolve_service(oracle, "oracle", {}, set(), lambda *a, **k: pytest.fail("resolved"),
+                                  load=lambda n: _defn("slt-oracle"), container_running=lambda c: True,
+                                  lock_timeout=0.2)
+        assert time.monotonic() - t0 < 10
+    finally:
+        held.release()

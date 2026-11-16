@@ -42,11 +42,29 @@ Declaration points:
 
 **Shared** — registered, non-destructive, coordinated:
 - `SLT_KEEP_SERVICES=1` is required. The run registers
-  `<SLT_LOCK_DIR>/.slt-endpoint-<port>.shared/<pid>`; refused while the exclusive lease is held.
-- Every service resolves through one adapter under `<SLT_LOCK_DIR>/.slt-shared-provision.lock`
-  (bounded wait, 600 s, then `lock-timeout: …`). Inside the lock a running container is recorded
-  `reused`; otherwise it is provisioned and recorded `provisioned-and-kept`. The parallel
-  provisioning registry uses a different lock file.
+  `<SLT_LOCK_DIR>/.slt-endpoint-<port>.shared/<pid>` (`pid`, `runId`, `started`: the process
+  start time); refused while the exclusive lease is held. A pre-flight entry point
+  (`livetest.preflight`, `livetest.cli start`) removes its marker before it returns.
+- A marker names a live session only while its pid is alive and is still the process that wrote
+  it: `started` must match the process start time (within 2 s). A marker without `started`
+  (written by an earlier release, or not a record) is judged by its file time: a process that
+  started after the marker was written (a reused pid, or any process after a reboot) is not its
+  writer. Every read under the port's registry lock removes markers that name no live session.
+- Every service resolves through one adapter under its container's lock,
+  `<SLT_LOCK_DIR>/.slt-shared-provision-<container>.lock` (bounded wait, 600 s, then
+  `lock-timeout: …`), so one service's slow start never holds up another's. Inside the lock a
+  running container is recorded `reused`; otherwise its provision records are dropped (a record
+  that outlived its container made the bring-up a no-op) and it is provisioned and recorded
+  `provisioned-and-kept`. The parallel provisioning registry uses a different lock file.
+- `SLT_SHARED_PROVISION=0` (unset or `1` is the default) refuses to start a missing service and
+  names its `python -m livetest.cli start <service>` command instead; a lane that must never start
+  a shared service sets it.
+- `livetest.cli stop` (and `livetest.preflight --teardown`) is refused, exit 2, while another live
+  session uses the stack: a live shared marker other than its own, or a live exclusive run other
+  than its own run. The refusal names the pids and the same command with `--force`, which stops
+  anyway. With no other live session the stop runs as before.
+- `livetest.preflight --restart-app-nodes` under `shared` is refused, exit 2, while another live
+  shared marker exists.
 - The cluster is reused when reachable, provisioned and kept when absent, never redeployed: an
   identity mismatch fails `shared cluster identity mismatch: …` and live items skip.
 - All invocations on a host must use the same `SLT_LOCK_DIR`; the value is recorded.

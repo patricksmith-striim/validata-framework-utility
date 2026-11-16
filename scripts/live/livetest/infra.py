@@ -46,8 +46,12 @@ OWNERSHIP_ENV = "SLT_INFRA_OWNERSHIP"
 MODES = ("exclusive", "shared")
 # An undeclared live run is refused.
 DEFAULT_INFRA_OWNERSHIP = None
-SHARED_PROVISION_LOCK = ".slt-shared-provision.lock"
 SHARED_LOCK_TIMEOUT_S = 600.0
+# SLT_SHARED_PROVISION=0 (a lane's .env): a shared run never starts a missing service, it names the start command.
+SHARED_PROVISION_ENV = "SLT_SHARED_PROVISION"
+# A shared marker's process start time is compared within this slack: a reused pid starts long after the
+# marker was written, while two reads of one process's start time can differ by a clock adjustment.
+_START_SLACK_S = 2.0
 # An xdist worker of the run that holds the exclusive lease joins it; the holder writes the
 # owner record right after acquiring, so a worker waits this long for it before refusing.
 _OWNER_WAIT_S = 5.0
@@ -90,6 +94,15 @@ def _pid_alive(pid: int) -> bool:
     except PermissionError:
         return True
     return True
+
+
+def _process_start(pid: int):
+    """The process's start time (seconds since the epoch), or None when it cannot be read."""
+    try:
+        import psutil
+        return psutil.Process(pid).create_time()
+    except Exception:                   # noqa: BLE001 - no such process, access denied, no psutil
+        return None
 
 
 def _docker_ps(argv):
@@ -223,7 +236,34 @@ def _shared_dir(lock_dir: Path, port: int) -> Path:
     return lock_dir / f".slt-endpoint-{port}.shared"
 
 
+def _marker_live(path: Path, pid: int, pid_alive) -> bool:
+    """A shared marker names a live session only while its pid is alive AND is still the process that wrote it.
+
+    A marker records its process's start time (``started``); a pid whose process started at another time is a
+    reused pid. A marker without one (written before markers recorded it, or not a marker record at all) is
+    judged by its file time instead: the process that wrote it was already running then, so a process that
+    started after the marker was written (a reused pid, or any process after a reboot) is not its writer.
+    When the start time cannot be read, the pid alone decides."""
+    if not pid_alive(pid):
+        return False
+    began = _process_start(pid)
+    if began is None:
+        return True
+    record = _read_owner(path)
+    started = record.get("started") if isinstance(record, dict) else None
+    if isinstance(started, (int, float)) and not isinstance(started, bool):
+        return abs(began - started) <= _START_SLACK_S
+    try:
+        written = path.stat().st_mtime
+    except OSError:
+        return False
+    return began <= written + _START_SLACK_S
+
+
 def _live_shared_markers(lock_dir: Path, port: int, pid_alive) -> list[int]:
+    """Live shared sessions on the port. Callers hold the port's registry lock: a marker that names no live
+    session (a dead or reused pid) is removed here, so a marker never outlives its process for long and a
+    later process given the same pid cannot pass for the session that wrote it."""
     d = _shared_dir(lock_dir, port)
     if not d.is_dir():
         return []
@@ -233,8 +273,13 @@ def _live_shared_markers(lock_dir: Path, port: int, pid_alive) -> list[int]:
             pid = int(p.name)
         except ValueError:
             continue
-        if pid_alive(pid):
+        if _marker_live(p, pid, pid_alive):
             alive.append(pid)
+            continue
+        try:
+            p.unlink()
+        except OSError:                 # another user's marker in the shared sticky dir: still not live
+            pass
     return sorted(alive)
 
 
@@ -292,6 +337,43 @@ def _read_owner(path: Path):
         return None
 
 
+def stop_refusal(env) -> str | None:
+    """Why a stop of the stack on this endpoint must not run now, or None.
+
+    Read under the port's registry lock, after the markers of dead and reused pids are pruned: a live shared
+    session other than this process, or a live exclusive run other than this process's own run (its lease is
+    held, or its owner or a member is alive). An exclusive run's leftover (no live holder or member) does not
+    refuse. A registry lock that cannot be taken refuses too: nothing was checked."""
+    _url, _host, port = striim_endpoint(env)
+    lock_dir = _lock_dir()
+    try:
+        registry = _registry(lock_dir, port)
+    except InfraOwnershipError as e:
+        return f"the ownership registry for Striim port {port} could not be read ({e})"
+    try:
+        shared = [pid for pid in _live_shared_markers(lock_dir, port, _pid_alive) if pid != os.getpid()]
+        lease_path = _exclusive_lease_path(lock_dir, port)
+        owner = _read_owner(Path(str(lease_path) + ".owner")) or {}
+        run_id = owner.get("runId") or ""
+        exclusive, held = [], False
+        if not run_id or run_id != (env.get("SLT_RUN_EPOCH") or ""):
+            exclusive = _live_members(lease_path, run_id, _pid_alive)
+            pid = owner.get("pid")
+            if isinstance(pid, int) and pid != os.getpid() and pid not in exclusive and _pid_alive(pid):
+                exclusive.append(pid)
+            held = _exclusive_lease_held(lock_dir, port)
+    finally:
+        registry.release()
+    users = []
+    if shared:
+        users.append(f"shared session pids {shared}")
+    if exclusive or held:
+        users.append(f"exclusive run {run_id or 'unknown'} (pids {sorted(exclusive) or 'unknown'})")
+    if not users:
+        return None
+    return f"other live sessions use the stack on Striim port {port}: {'; '.join(users)}"
+
+
 def declare(env=None, *, run=None, pid_alive=None) -> Infra:
     """Declare this process's infrastructure ownership, or raise ``InfraOwnershipError``.
 
@@ -329,10 +411,12 @@ def _declare_shared(env, port: int, lock_dir: Path) -> Infra:
             raise InfraOwnershipError(
                 f"{OWNERSHIP_ENV}=shared refused: an exclusive run holds the endpoint lease for port "
                 f"{port} ({_exclusive_lease_path(lock_dir, port)}; run {owner.get('runId', 'unknown')})")
+        _live_shared_markers(lock_dir, port, _pid_alive)    # prunes markers of dead and reused pids
         d = _shared_dir(lock_dir, port)
         lockdir.ensure_dir(d)
         marker = d / str(os.getpid())
-        lockdir.write_text(marker, json.dumps({"pid": os.getpid(), "runId": env.get("SLT_RUN_EPOCH", "")}))
+        lockdir.write_text(marker, json.dumps({"pid": os.getpid(), "runId": env.get("SLT_RUN_EPOCH", ""),
+                                               "started": _process_start(os.getpid())}))
     finally:
         registry.release()
     return Infra("shared", port, lock_dir, run_id=env.get("SLT_RUN_EPOCH", ""),
@@ -714,14 +798,33 @@ def teardown_failed(config, what: str, exc: BaseException) -> None:
         infra.teardown = {"status": "failed", "failures": list(failures)}
 
 
+def shared_provision_lock(container: str) -> str:
+    """The shared provisioning lock of one service container, in the machine-wide lock dir. One lock per
+    container, so a Postgres bring-up never waits behind a cold Oracle start."""
+    return f".slt-shared-provision-{container}.lock"
+
+
+def _shared_provision_allowed(env) -> bool:
+    """``SLT_SHARED_PROVISION``: unset or 1 starts a missing shared service (the default); 0 refuses."""
+    value = (env.get(SHARED_PROVISION_ENV) or "").strip()
+    if value in ("", "1"):
+        return True
+    if value == "0":
+        return False
+    raise InfraOwnershipError(f"{SHARED_PROVISION_ENV}={value!r} is not an accepted value: use 1 or 0")
+
+
 def resolve_service(infra, name, env, started, resolve_fn, progress=None, *, load=None,
-                    container_running=None, lock_timeout=SHARED_LOCK_TIMEOUT_S, acquire_lock=None):
+                    container_running=None, lock_timeout=SHARED_LOCK_TIMEOUT_S, acquire_lock=None,
+                    forget=None):
     """The one service adapter for serial and parallel callers (C7.1, N3).
 
-    Undeclared and exclusive: ``resolve_fn`` unchanged. Shared: under the machine-wide shared
-    provisioning lock (bounded), recheck the prefixed container inside the lock; a running one is
+    Undeclared and exclusive: ``resolve_fn`` unchanged. Shared: under the container's machine-wide
+    shared provisioning lock (bounded), recheck the prefixed container inside the lock; a running one is
     pre-registered in ``started`` (``resolve`` then sees ``first == False``) and recorded
-    ``reused``; otherwise ``resolve_fn`` provisions it and it is recorded ``provisioned-and-kept``.
+    ``reused``; otherwise its provision records are forgotten (a record outliving its container made the
+    bring-up a no-op) and ``resolve_fn`` provisions it, recorded ``provisioned-and-kept``. Under
+    ``SLT_SHARED_PROVISION=0`` a missing container is refused instead, naming the start command.
     ``ensure_provisioned_once`` (parallel branch) uses a different lock file, so nothing is
     acquired recursively. ``acquire_lock(lock)``, when given, replaces the bounded acquire."""
     if infra is None:
@@ -742,7 +845,9 @@ def resolve_service(infra, name, env, started, resolve_fn, progress=None, *, loa
         return resolved
     if container in started:
         return resolve_fn(name, env, started, progress=progress)
-    lock = FileLock(str(_lock_dir() / SHARED_PROVISION_LOCK), mode=lockdir.file_mode())
+    allowed = _shared_provision_allowed(env)
+    lock_path = _lock_dir() / shared_provision_lock(container)
+    lock = FileLock(str(lock_path), mode=lockdir.file_mode())
     try:
         if acquire_lock is not None:
             acquire_lock(lock)
@@ -750,13 +855,30 @@ def resolve_service(infra, name, env, started, resolve_fn, progress=None, *, loa
             lock.acquire(timeout=lock_timeout)
     except Timeout:
         raise InfraOwnershipError(
-            f"lock-timeout: {_lock_dir() / SHARED_PROVISION_LOCK} not acquired within "
+            f"lock-timeout: {lock_path} not acquired within "
             f"{lock_timeout:.0f}s while resolving shared service {name}") from None
     try:
         if container_running(container):
             started.add(container)
             status = "reused"
         else:
+            if not allowed:
+                prefix = stack.prefix(env)
+                raise InfraOwnershipError(
+                    f"shared service {name} ({container}) is not running, and {SHARED_PROVISION_ENV}=0 forbids "
+                    f"starting it here; start it with: "
+                    f"{f'SLT_STACK_PREFIX={prefix} ' if prefix else ''}python -m livetest.cli start {name}")
+            if forget is None:
+                from livetest.services import forget_provisioned as forget
+            try:
+                # Only where `resolve` consults the provision registry (its parallel branch): a serial
+                # run never reads it, and needs no state dir for it.
+                if env.get("PYTEST_XDIST_WORKER") or env.get("SLT_PARALLEL"):
+                    forget([container, f"{name}-setup"], timeout=dockercmd.LOCK_WAIT_S)
+            except Timeout:
+                raise InfraOwnershipError(
+                    f"lock-timeout: the provision registry was not available within "
+                    f"{dockercmd.LOCK_WAIT_S:.0f}s while resolving shared service {name}") from None
             status = "provisioned-and-kept"
         resolved = resolve_fn(name, env, started, progress=progress)
     finally:

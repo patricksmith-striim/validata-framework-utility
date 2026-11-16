@@ -104,8 +104,14 @@ _LOCK_DIR = Path(os.environ.get("SLT_LOCK_DIR", "/tmp/slt-locks"))
 
 def lock_path(base: str, env=None) -> Path:
     """Machine-wide path for a coordination lock, prefix-scoped per stack."""
+    return host_lock_path(state_name(base, env))
+
+
+def host_lock_path(name: str) -> Path:
+    """Machine-wide path for a coordination lock named ``name`` as given. The integration tier scopes its
+    names by INT_STACK_PREFIX (its containers are named by that prefix, not by SLT_STACK_PREFIX)."""
     lockdir.ensure_dir(_LOCK_DIR)       # shared by every user on the host
-    return _LOCK_DIR / state_name(base, env)
+    return _LOCK_DIR / name
 
 
 def striim_container(env=None) -> str:

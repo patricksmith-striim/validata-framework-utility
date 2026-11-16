@@ -143,14 +143,15 @@ def service_compose_path(defn: ServiceDef):
         return None
     return Path(defn.dir) / defn.compose
 
-def forget_provisioned(keys, state_dir=None) -> None:
+def forget_provisioned(keys, state_dir=None, timeout: float = -1) -> None:
     """Drop `keys` from the provision registry — the de-provision counterpart of
     `ensure_provisioned_once`, for a caller that tears a container down OUTSIDE a session
     boundary. Workers never call this (spec §C.4's asymmetry is about workers); an explicit
     `livetest.cli stop <service>` must, or its record outlives the container and the next
-    bring-up finds the key, skips `docker compose up`, and reports success over nothing."""
+    bring-up finds the key, skips `docker compose up`, and reports success over nothing.
+    ``timeout`` bounds the wait for the registry lock (``filelock.Timeout``); the default waits."""
     reg, lock = _provision_state_paths(state_dir)
-    with FileLock(str(lock), mode=lockdir.file_mode()):
+    with FileLock(str(lock), mode=lockdir.file_mode(), timeout=timeout):
         try:
             state = json.loads(reg.read_text())
         except (FileNotFoundError, ValueError):

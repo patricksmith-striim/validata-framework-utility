@@ -76,7 +76,7 @@ def test_a_named_start_runs_the_hook_then_brings_the_service_up(tdx, monkeypatch
 
 def test_a_test_selection_preflight_runs_the_hook():
     from livetest import preflight
-    calls = [node for node in ast.walk(ast.parse(inspect.getsource(preflight.provision)))
+    calls = [node for node in ast.walk(ast.parse(inspect.getsource(preflight._provision_resolved)))
              if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
              and node.func.id == "_bring_up_services"]
     [call] = calls
@@ -201,7 +201,7 @@ def test_a_failed_hook_fails_the_selected_test_and_the_start(tdx, monkeypatch):
     preflight = _preflight(monkeypatch)
     with pytest.raises(prestart.PreUpError):          # provision_services turns this into rc 1
         preflight._bring_up_services(["tdx"], {}, apply_gate=False)
-    assert "except _prestart.PreUpError:\n        return 1" in inspect.getsource(preflight.provision)
+    assert "except _prestart.PreUpError:\n        return 1" in inspect.getsource(preflight._provision_resolved)
 
 
 def test_the_hermetic_suite_switches_hooks_off():

@@ -105,9 +105,10 @@ _INT_SERVICE_KEYS = (
     "INT_VERTICA_TARGET_SCHEMA", "INT_VERTICA_TARGET_USER",
 )
 # Service knobs no service.yaml names: SLT_PRE_UP=0 turns off every service's pre_up hook
-# (livetest.prestart, inttest.services.run_pre_up).
+# (livetest.prestart, inttest.services.run_pre_up); SLT_SHARED_PROVISION=0 keeps a shared run from
+# starting a missing service (livetest.infra.resolve_service).
 _SERVICE_EXTRA_KEYS = (
-    "SLT_PG_FIXTURE_TIMEOUT",
+    "SLT_PG_FIXTURE_TIMEOUT", "SLT_SHARED_PROVISION",
     "SLT_PG_IDLE_TRANSACTION_TIMEOUT_MS", "INT_PG_IDLE_TRANSACTION_TIMEOUT_MS",
     "SLT_PRE_UP", "SLT_STACK_PREFIX", "INT_STACK_PREFIX", "SLT_TERADATA_JDBC", "SLT_STRIIM_TRYOUT_JARS",
     "SLT_STRIIM_PRIMARY_CPUS", "SLT_STRIIM_NODE_CPUS", "SLT_STRIIM_MEM_MAX",
