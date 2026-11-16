@@ -71,7 +71,7 @@ def _ts(literal: str) -> datetime:
 
 
 def test_the_samples_are_numbered_simplest_first():
-    assert sorted(p.name for p in SAMPLES.iterdir() if p.is_dir()) == list(ASSETS) + list(MYSQL) + ["07-spanner-exact", "08-strict-json", "09-raw-file", "10-bounded-nothing", "11-transaction-seeds", "12-snapshot-observer", "13-append-only-audit", "14-progress-recovery", "16-recovery-sentinel", "17-one-node-failover", "18-kafka-nothing"] + list(BIGQUERY)
+    assert sorted(p.name for p in SAMPLES.iterdir() if p.is_dir()) == list(ASSETS) + list(MYSQL) + ["07-spanner-exact", "08-strict-json", "09-raw-file", "10-bounded-nothing", "11-transaction-seeds", "12-snapshot-observer", "13-append-only-audit", "14-progress-recovery", "16-recovery-sentinel", "17-one-node-failover", "18-kafka-nothing", "19-expect-halt"] + list(BIGQUERY)
 
 
 @pytest.mark.parametrize("name", list(ASSETS) + list(MYSQL) + list(BIGQUERY))
@@ -454,3 +454,26 @@ def test_kafka_nothing_sample_and_regression_share_the_delivery_contract():
         assert (root / filename).read_bytes() == (twin / filename).read_bytes()
     tql = (root / "app.tql").read_text()
     assert "${KAFKA_TGT_TOPIC}" in tql and "Global.KafkaWriter" in tql and "Global.JSONFormatter" in tql
+
+
+def test_expect_halt_sample_halts_on_its_own_missing_table():
+    """The halt is the assertion: no assert: block, and the halt reason must name the target table
+    the writer maps to, which no ddl: file creates and which carries this case's ${TID}."""
+    root = SAMPLES / "19-expect-halt"
+    assert {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()} == {
+        "README.md", "app.tql", "test.yaml", "ddl_source.sql", "seed.sql"}
+    m = load_manifest(root / "test.yaml")
+    raw = _raw("19-expect-halt")
+    assert m.expect_halt is True and "assert" not in raw
+    assert raw["expect_halt_contains"] == "no_such_target"
+    tql = (root / "app.tql").read_text()
+    assert "${PG_TARGET_SCHEMA}.${TID}no_such_target" in tql
+    ddl = "".join((root / f).read_text() for _db, f in m.ddl_files)
+    assert "no_such_target" not in ddl
+    assert "CREATE NAMESPACE ${NS};" in tql and "START APPLICATION ${APP};" in tql
+    assert "striim-test run samples/live/19-expect-halt" in (root / "README.md").read_text()
+
+
+def test_agents_points_at_the_framework_gallery():
+    agents = (SAMPLES.parents[1] / "AGENTS.md").read_text()
+    assert "`scripts/live/regression/framework/`" in agents

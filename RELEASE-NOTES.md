@@ -227,6 +227,10 @@ the last release; the release makes it that version's entry.
   it happens, the run ends with an "integration teardown left objects behind" section, and the
   case record carries the failed steps in `teardownLeaks`. Before, it was a captured print that
   only `-rP` showed. The case keeps its outcome.
+- **Sample `19-expect-halt`**: a case that passes because the app halts, with
+  `expect_halt_contains` naming the case's own missing table. `AGENTS.md` now points at the
+  framework gallery (`scripts/live/regression/framework/`) for the `test.yaml` features no sample
+  uses.
 - `assert.data`, `assert.diff` and `assert.json` accept `stable_seconds`, as `assert.file` does:
   after every spec first passes, keep reading for N seconds, and fail on a late change. On all four
   tiers it must be a finite number of seconds up to 2147483.647; `.inf` and `.nan` are refused at
