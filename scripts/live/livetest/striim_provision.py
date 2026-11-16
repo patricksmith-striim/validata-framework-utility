@@ -809,7 +809,20 @@ def _compose_files():
     files = list(_COMPOSE_FILES)
     if os.environ.get("SLT_ENABLE_NODE_FAULTS") == "1":
         files += ["-f", "compose.node-fault.yaml"]
+    if _debug_enabled():
+        files += ["-f", DEBUG_COMPOSE_FILE]
     return files
+
+
+# SLT_STRIIM_DEBUG=1 runs the primary's JDWP debugger, published on the host's 127.0.0.1 only
+# (compose.debug.yaml). Off otherwise: JDWP has no authentication.
+DEBUG_ENV = "SLT_STRIIM_DEBUG"
+DEBUG_COMPOSE_FILE = "compose.debug.yaml"
+
+
+def _debug_enabled() -> bool:
+    from livetest import paths
+    return paths.effective_env(os.environ).get(DEBUG_ENV) == "1"
 
 
 _COMPOSE_FILES = ["-f", "compose.yaml", "-f", "compose.spanner-emulator.yaml",

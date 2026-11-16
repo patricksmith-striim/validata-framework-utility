@@ -519,7 +519,9 @@ ServiceNow itself, so tests assert on where a reader's data lands, or on Striim'
 In Docker mode the framework builds a Striim image and runs a primary node (`slt-striim`, web UI and
 REST on port 9080), a second node (`slt-node`) and an agent (`slt-agent`). The login is
 `admin`/`striim`. Building it, its license and its resource limits are in
-[RUN-YOUR-FIRST-TEST.md](RUN-YOUR-FIRST-TEST.md), "Docker mode".
+[RUN-YOUR-FIRST-TEST.md](RUN-YOUR-FIRST-TEST.md), "Docker mode". The primary's Java debugger
+(JDWP, which has no authentication) is off unless `SLT_STRIIM_DEBUG=1`, which publishes it on
+`127.0.0.1:8787` only (`SLT_STRIIM_DEBUG_HOST_PORT` moves it).
 
 ## Not shipped
 

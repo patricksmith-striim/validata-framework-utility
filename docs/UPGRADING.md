@@ -170,6 +170,12 @@ if they must.
 New. `0` makes a shared run fail a case whose service is not running instead of starting it, and
 names the start command. Leave it unset (or `1`) to keep today's behaviour.
 
+### JDWP debugger off by default
+
+The Striim primary no longer runs a Java debugger on port 8787. To debug it, set
+`SLT_STRIIM_DEBUG=1`; the port is then published on `127.0.0.1` only, so from another machine
+forward it over SSH. A second stack no longer needs `SLT_STRIIM_DEBUG_HOST_PORT` unless both debug.
+
 ## v0.3.2
 
 ### Whole-number decimals in integration goldens (breaking)

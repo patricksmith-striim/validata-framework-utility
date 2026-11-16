@@ -105,7 +105,8 @@ Start from your repository's `.env.example`. `striim-test doctor` lists the sett
 | `SLT_STRIIM_JMX_HOST_PORT` | shell, `.env` | `7071` | Host port of the primary's JMX Prometheus exporter. |
 | `SLT_STRIIM_NODE_JMX_HOST_PORT` | shell, `.env` | `7075` | Host port of the second node's JMX exporter. |
 | `SLT_STRIIM_AGENT_JMX_HOST_PORT` | shell, `.env` | `7076` | Host port of the agent's JMX exporter. |
-| `SLT_STRIIM_DEBUG_HOST_PORT` | shell, `.env` | `8787` | Host port of the primary's JDWP remote debugger. |
+| `SLT_STRIIM_DEBUG` | shell, `.env`, machine | unset (off) | `1`: run the primary's JDWP remote debugger, published on `127.0.0.1` only. JDWP has no authentication; from another machine, forward the port over SSH. |
+| `SLT_STRIIM_DEBUG_HOST_PORT` | shell, `.env` | `8787` when enabled | Host port of the primary's JDWP remote debugger; published only with `SLT_STRIIM_DEBUG=1`. |
 
 ## Services
 

@@ -9,6 +9,8 @@ How it is built:
 
 - `download-dependencies.sh` fetches the Striim packages and JDBC drivers (about 6.3 GB) into
   `images/striim/deps/` (not in git), or the framework copies them from `SLT_STRIIM_DEPS_MANIFEST`.
+- `compose.debug.yaml` (added by `SLT_STRIIM_DEBUG=1`) turns on the primary's JDWP debugger and
+  publishes it on `127.0.0.1` only. Without it there is no debugger.
 - `images/striim/Dockerfile` builds an amd64 image from them. The release comes from `STRIIM_HOME`
   (default 5.4.2); `.env` here holds only the Oracle instant client build arguments.
 - The license is never baked in: `COMPANY_NAME`, `CLUSTER_NAME`, `PRODUCT_KEY` and `LICENCE_KEY` come

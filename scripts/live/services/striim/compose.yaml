@@ -85,7 +85,7 @@ services:
          - "${SLT_STRIIM_HTTP_HOST_PORT:-9080}:9080"    # console / HTTP API
          - "${SLT_STRIIM_HTTPS_HOST_PORT:-9081}:9081"   # HTTPS
          - "${SLT_STRIIM_JMX_HOST_PORT:-7071}:7071"     # JMX Prometheus exporter
-         - "${SLT_STRIIM_DEBUG_HOST_PORT:-8787}:8787"   # JDWP remote debug
+         # JDWP (8787) is not published here: it is opt-in, see compose.debug.yaml.
       volumes:
          - slt-striim-shared:/shared
       build:

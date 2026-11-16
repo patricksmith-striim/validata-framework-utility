@@ -149,6 +149,10 @@ the last release; the release makes it that version's entry.
 - **`checkpoint_history: {predates: …}` fails when a read after the seed shows no checkpoint.**
   The history survives a kill restart, so an empty `interrupt` or `restored` read after a
   non-empty `seed` read proved nothing and passed. It now fails, naming the read.
+- **The Striim primary's Java debugger (JDWP) is off by default.** It listened on every interface,
+  port 8787, with no authentication, and the port was published on every host interface.
+  `SLT_STRIIM_DEBUG=1` turns it on, published on `127.0.0.1` only (`SLT_STRIIM_DEBUG_HOST_PORT`,
+  default 8787). The image rebuilds once, because its entrypoint changed.
 - **Integration: one test item per variant group.** A case with variants becomes several items,
   named `case[variant]` (`case[a+b]` when variants share a service). `-m <service>` now runs only
   that service's variants. Scripts or reports that name items by id see the new ids.
