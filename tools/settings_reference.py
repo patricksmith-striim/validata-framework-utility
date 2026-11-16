@@ -85,8 +85,9 @@ SECTIONS = (
         ("SLT_LIVE_CASES", "`scripts/live/regression`",
          "The live case root, or several separated by `:` (`;` on Windows). `striim-test run PATH` "
          "runs only cases under it."),
-        ("SLT_INT_CASES", "`scripts/integration/regression`, which the framework does not ship",
-         "The integration case root. The framework ships no integration cases, so set it to yours."),
+        ("SLT_INT_CASES", "`scripts/integration/regression`",
+         "The integration case root. The framework ships one sample case there "
+         "(`op/referenceop/referenceop-adds-processed`); set it to your own cases."),
         ("SLT_SERVICES_DIR", "`scripts/live/services`", "Live service definitions."),
         ("SLT_INT_SERVICES_DIR", "`scripts/integration/services`", "Integration service definitions."),
         ("SLT_STATE_DIR", "`scripts/live`", "Run directories and coordination files."),

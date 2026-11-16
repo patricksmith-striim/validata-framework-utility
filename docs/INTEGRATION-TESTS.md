@@ -16,7 +16,8 @@ prove the module works inside a running app.
 
 ## Where cases live
 
-This repo ships no integration cases. Yours live in your own repo, one folder per case:
+This repo ships one case, the one under [Your first case](#your-first-case). Yours live in your own
+repo, one folder per case:
 
 ```
 tests/integration/
@@ -36,7 +37,10 @@ striim-test run --targets gold-targets.yaml --tier integration
 ## Your first case
 
 This case drives the sample Open Processor (`samples/code/op`), which copies each event and adds
-`processed=true` to its userdata. One input event, one expected event:
+`processed=true` to its userdata. One input event, one expected event. The framework ships it at
+`scripts/integration/regression/op/referenceop/referenceop-adds-processed/`, the integration
+tier's default case root, so from the framework clone (with Maven, a JDK and `STRIIM_HOME` set)
+`striim-test run --tier integration` runs it:
 
 ```
 referenceop-adds-processed/

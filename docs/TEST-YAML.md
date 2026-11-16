@@ -2344,6 +2344,8 @@ writer overwrote, or a row added) fails the run. The window runs past `timeout` 
 read that raises ends the assertion, as it does before the first pass. Without it, the first
 read that matches passes.
 
+Worked case: [20-spanner-json](../samples/live/20-spanner-json/README.md).
+
 ### `monitor` — what Striim's monitor shows for a component
 
 <!-- snippet: fragment -->

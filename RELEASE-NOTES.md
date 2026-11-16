@@ -231,6 +231,11 @@ the last release; the release makes it that version's entry.
   `expect_halt_contains` naming the case's own missing table. `AGENTS.md` now points at the
   framework gallery (`scripts/live/regression/framework/`) for the `test.yaml` features no sample
   uses.
+- **Sample `20-spanner-json`**: SpannerBatchReader copies a table with a Spanner `JSON` column
+  through SpannerWriter, and `assert.json` compares each document by type and array order.
+- **One shipped integration case**, `scripts/integration/regression/op/referenceop/referenceop-adds-processed`:
+  the case `docs/INTEGRATION-TESTS.md` walks through, in the tier's default case root, so
+  `striim-test run --tier integration` in the clone runs it. `samples/` stays live-only.
 - `assert.data`, `assert.diff` and `assert.json` accept `stable_seconds`, as `assert.file` does:
   after every spec first passes, keep reading for N seconds, and fail on a late change. On all four
   tiers it must be a finite number of seconds up to 2147483.647; `.inf` and `.nan` are refused at

@@ -71,7 +71,7 @@ def _ts(literal: str) -> datetime:
 
 
 def test_the_samples_are_numbered_simplest_first():
-    assert sorted(p.name for p in SAMPLES.iterdir() if p.is_dir()) == list(ASSETS) + list(MYSQL) + ["07-spanner-exact", "08-strict-json", "09-raw-file", "10-bounded-nothing", "11-transaction-seeds", "12-snapshot-observer", "13-append-only-audit", "14-progress-recovery", "16-recovery-sentinel", "17-one-node-failover", "18-kafka-nothing", "19-expect-halt"] + list(BIGQUERY)
+    assert sorted(p.name for p in SAMPLES.iterdir() if p.is_dir()) == list(ASSETS) + list(MYSQL) + ["07-spanner-exact", "08-strict-json", "09-raw-file", "10-bounded-nothing", "11-transaction-seeds", "12-snapshot-observer", "13-append-only-audit", "14-progress-recovery", "16-recovery-sentinel", "17-one-node-failover", "18-kafka-nothing", "19-expect-halt", "20-spanner-json"] + list(BIGQUERY)
 
 
 @pytest.mark.parametrize("name", list(ASSETS) + list(MYSQL) + list(BIGQUERY))
@@ -477,3 +477,24 @@ def test_expect_halt_sample_halts_on_its_own_missing_table():
 def test_agents_points_at_the_framework_gallery():
     agents = (SAMPLES.parents[1] / "AGENTS.md").read_text()
     assert "`scripts/live/regression/framework/`" in agents
+
+
+def test_spanner_json_sample_golden_is_its_seed():
+    """assert.json on a JSON column SpannerWriter copies: the golden is each seeded document, keyed
+    by id as text, derived from seed.sql by hand (and here by parsing it)."""
+    import json as _json
+    root = SAMPLES / "20-spanner-json"
+    assert {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()} == {
+        "README.md", "app.tql", "test.yaml", "ddl.sql", "seed.sql", "expected/tgt.json"}
+    m = load_manifest(root / "test.yaml")
+    assert m.requires == ["spanner"]
+    [spec] = _raw("20-spanner-json")["assert"]["json"]
+    assert (spec["target"], spec["db"], spec["key"], spec["column"]) == ("${TID}tgt", "spanner-google", ["id"], "doc")
+    assert "doc JSON" in (root / "ddl.sql").read_text()
+    seeded = re.findall(r"\((\d+), JSON '(.*?)'\)", (root / "seed.sql").read_text())
+    golden = _json.loads((root / spec["match"]).read_text())
+    assert golden == [{"id": i, "doc": _json.loads(doc)} for i, doc in seeded]
+    tql = (root / "app.tql").read_text()
+    assert "Global.SpannerBatchReader" in tql and "Global.SpannerWriter" in tql
+    assert "_h_" not in tql, "no internal adapter property in a shipped sample"
+    assert "striim-test run samples/live/20-spanner-json" in (root / "README.md").read_text()

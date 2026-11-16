@@ -134,7 +134,7 @@ real instance.
 
 The integration tier (`scripts/integration`) tests an Open Processor or UDF against databases without a
 whole Striim app. It uses its own containers, on other ports, so it can run beside the live tier.
-This repo ships no integration cases (`SLT_INT_CASES` points at yours).
+This repo ships one integration case, `scripts/integration/regression/op/referenceop/referenceop-adds-processed`; `SLT_INT_CASES` points at yours.
 
 | Service | Image | Host port | Your own instance | Status |
 |---|---|---|---|---|
