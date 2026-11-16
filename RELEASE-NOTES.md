@@ -153,6 +153,11 @@ the last release; the release makes it that version's entry.
   port 8787, with no authentication, and the port was published on every host interface.
   `SLT_STRIIM_DEBUG=1` turns it on, published on `127.0.0.1` only (`SLT_STRIIM_DEBUG_HOST_PORT`,
   default 8787). The image rebuilds once, because its entrypoint changed.
+- **A framework run publishes service ports for this machine and its containers only**:
+  `127.0.0.1`, plus the Docker bridge gateway on a Linux engine (where `host.docker.internal`
+  leads). They were published on every interface, with fixed, public credentials.
+  `SLT_BIND_ADDRESS` publishes on one address you choose (`0.0.0.0` is every interface). A compose
+  file run by hand with `SLT_BIND_ADDRESS` unset still publishes on every interface.
 - **Integration: one test item per variant group.** A case with variants becomes several items,
   named `case[variant]` (`case[a+b]` when variants share a service). `-m <service>` now runs only
   that service's variants. Scripts or reports that name items by id see the new ids.

@@ -146,14 +146,16 @@ def test_secondary_api_port_is_opt_in_and_allowed(monkeypatch):
     compose = yaml.safe_load((root / "scripts/live/services/striim/compose.yaml").read_text())
     from livetest import striim_provision as sp
     mapping = "${SLT_STRIIM_NODE_HTTP_HOST_PORT:-9082}:9080"
-    assert mapping not in compose["services"]["slt-node"]["ports"]
+    bound = [f"{b}:{mapping}" for b in ("${SLT_BIND_ADDRESS:-0.0.0.0}",
+                                        "${SLT_BIND_GATEWAY:-${SLT_BIND_ADDRESS:-0.0.0.0}}")]
+    assert not [p for p in compose["services"]["slt-node"]["ports"] if p.endswith(mapping)]
     recipe = root / "scripts/live/services/striim"
     monkeypatch.delenv("SLT_ENABLE_NODE_FAULTS", raising=False)
     assert "compose.node-fault.yaml" not in sp._compose_files()
     monkeypatch.setenv("SLT_ENABLE_NODE_FAULTS", "1")
     assert "compose.node-fault.yaml" in sp._compose_files()
     overlay = yaml.safe_load((recipe / "compose.node-fault.yaml").read_text())
-    assert overlay["services"]["slt-node"]["ports"] == [mapping]
+    assert overlay["services"]["slt-node"]["ports"] == bound
     assert "SLT_STRIIM_NODE_HTTP_HOST_PORT" in paths.SERVICE_KEYS
 
 

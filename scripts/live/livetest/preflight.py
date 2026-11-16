@@ -184,7 +184,8 @@ def missing_port_overrides(services, env=None) -> list:
         if not path or not pathlib.Path(path).is_file():
             continue
         text = pathlib.Path(path).read_text()
-        for var, default in _PORT_VAR_RE.findall(text):
+        # Each mapping is written twice (bind address and gateway): report a variable once.
+        for var, default in dict.fromkeys(_PORT_VAR_RE.findall(text)):
             if default and not (env.get(var) or "").strip():
                 missing.append((svc, var, default))
     return missing

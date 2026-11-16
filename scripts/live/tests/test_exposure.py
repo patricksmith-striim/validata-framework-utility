@@ -1,14 +1,20 @@
-"""What the stack exposes on the host: the primary's JDWP debugger.
+"""What the stack exposes on the host: the primary's JDWP debugger and the service ports' bind address.
 
-JDWP is opt-in (SLT_STRIIM_DEBUG=1) and published on 127.0.0.1 only.
+JDWP is opt-in (SLT_STRIIM_DEBUG=1) and published on 127.0.0.1 only. Every other published port is
+bound to ${SLT_BIND_ADDRESS} (all interfaces when compose runs with it unset, as before), with a
+second entry for the address containers reach the host on (${SLT_BIND_GATEWAY}); the harness sets
+both for its own bring-ups so a run is reachable from this machine and its containers only.
 """
+import os
 import re
+import types
 from pathlib import Path
 
 import pytest
 import yaml
 
 import livetest
+from livetest import bindaddr
 from livetest import striim_provision as sp
 
 REPO = Path(livetest.__file__).resolve().parents[3]
@@ -18,6 +24,9 @@ STRIIM = LIVE / "services" / "striim"
 ENTRYPOINT = STRIIM / "images" / "striim" / "files" / "entrypoint.sh"
 DEBUG_OVERLAY = "compose.debug.yaml"
 JDWP = "127.0.0.1:${SLT_STRIIM_DEBUG_HOST_PORT:-8787}:8787"
+
+BIND = "${SLT_BIND_ADDRESS:-0.0.0.0}"
+GATEWAY = "${SLT_BIND_GATEWAY:-${SLT_BIND_ADDRESS:-0.0.0.0}}"
 
 
 # ------------------------------------------------------------------ JDWP (opt-in, loopback only)
@@ -75,3 +84,161 @@ def test_slt_striim_debug_from_dotenv_is_honoured(monkeypatch):
 def test_debug_switch_is_a_known_setting():
     from livetest import paths
     assert "SLT_STRIIM_DEBUG" in paths.SERVICE_KEYS
+
+
+# ------------------------------------------------------------------ bind address: compose shape
+def _port_entries():
+    out = []
+    for root in (LIVE, INTEG):
+        for path in sorted(root.glob("services/*/compose*.yaml")):
+            if path.name == DEBUG_OVERLAY:
+                continue
+            doc = yaml.safe_load(path.read_text()) or {}
+            for name, svc in (doc.get("services") or {}).items():
+                ports = [str(p) for p in (svc or {}).get("ports") or []]
+                if ports:
+                    out.append((f"{path.relative_to(REPO)}:{name}", ports))
+    return out
+
+
+def test_every_published_port_is_bound_to_the_bind_address_and_the_gateway():
+    mappings = 0
+    for where, ports in _port_entries():
+        assert len(ports) % 2 == 0, (where, ports)
+        for first, second in zip(ports[0::2], ports[1::2]):
+            assert first.startswith(BIND + ":"), (where, first)
+            assert second.startswith(GATEWAY + ":"), (where, second)
+            assert first[len(BIND):] == second[len(GATEWAY):], (where, first, second)
+            mappings += 1
+    assert mappings == 32, mappings          # every service port of both tiers, JDWP excluded
+
+
+def test_no_port_entry_carries_a_second_address():
+    for where, ports in _port_entries():
+        for p in ports:
+            rest = p[len(BIND):] if p.startswith(BIND) else p[len(GATEWAY):]
+            bare = re.sub(r"\$\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}", "X", rest)
+            assert bare.count(":") == 2, (where, p)          # ":<host port>:<container port>"
+
+
+def test_bind_address_is_a_known_setting():
+    from livetest import paths
+    assert "SLT_BIND_ADDRESS" in paths.SERVICE_KEYS
+
+
+# ------------------------------------------------------------------ bind address: the harness value
+def _run(outputs):
+    calls = []
+
+    def run(argv, **kw):
+        calls.append((argv, kw))
+        code, out, err = outputs[argv[1]]
+        return types.SimpleNamespace(returncode=code, stdout=out, stderr=err)
+    return run, calls
+
+
+def test_an_explicit_bind_address_is_the_only_address(monkeypatch):
+    monkeypatch.setattr(bindaddr, "_cached_gateway", lambda: pytest.fail("detected"))
+    assert bindaddr.compose_env({"SLT_BIND_ADDRESS": " 10.1.2.3 "}) == {
+        "SLT_BIND_ADDRESS": "10.1.2.3", "SLT_BIND_GATEWAY": "10.1.2.3"}
+    assert bindaddr.compose_env({"SLT_BIND_ADDRESS": "0.0.0.0", "SLT_BIND_GATEWAY": "172.17.0.1"}) == {
+        "SLT_BIND_ADDRESS": "0.0.0.0", "SLT_BIND_GATEWAY": "0.0.0.0"}
+
+
+@pytest.mark.parametrize("bad", ["localhost", "::1", "10.0.0", "1.2.3.4:80", "0.0.0.0 1.2.3.4"])
+def test_a_bind_address_that_is_not_an_ipv4_address_is_refused(bad):
+    with pytest.raises(bindaddr.BindAddressError, match="SLT_BIND_ADDRESS"):
+        bindaddr.compose_env({"SLT_BIND_ADDRESS": bad})
+
+
+def test_unset_bind_address_publishes_on_loopback_and_the_detected_gateway(monkeypatch):
+    monkeypatch.setattr(bindaddr, "_cached_gateway", lambda: "172.17.0.1")
+    assert bindaddr.compose_env({}) == {"SLT_BIND_ADDRESS": "127.0.0.1", "SLT_BIND_GATEWAY": "172.17.0.1"}
+    monkeypatch.setattr(bindaddr, "_cached_gateway", lambda: None)
+    assert bindaddr.compose_env({"SLT_BIND_ADDRESS": "", "SLT_BIND_GATEWAY": "0.0.0.0"}) == {
+        "SLT_BIND_ADDRESS": "127.0.0.1", "SLT_BIND_GATEWAY": "127.0.0.1"}
+
+
+def test_docker_desktop_needs_no_gateway():
+    run, calls = _run({"info": (0, "Docker Desktop\n", "")})
+    assert bindaddr.detect_gateway(run=run) is None
+    assert [c[0][:2] for c in calls] == [["docker", "info"]]
+
+
+def test_a_linux_engine_publishes_on_the_default_bridge_gateway():
+    run, calls = _run({"info": (0, "Ubuntu 24.04.1 LTS\n", ""),
+                       "network": (0, "fd00::1 172.17.0.1 \n", "")})
+    assert bindaddr.detect_gateway(run=run) == "172.17.0.1"
+    assert calls[1][0][:4] == ["docker", "network", "inspect", "bridge"]
+    for _argv, kw in calls:
+        assert kw.get("timeout"), "every docker query is bounded"
+
+
+@pytest.mark.parametrize("outputs, needle", [
+    ({"info": (1, "", "Cannot connect to the Docker daemon")}, "Cannot connect to the Docker daemon"),
+    ({"info": (124, "", "")}, "docker info"),
+    ({"info": (0, "Ubuntu\n", ""), "network": (1, "", "network bridge not found")}, "network bridge not found"),
+    ({"info": (0, "Ubuntu\n", ""), "network": (0, "fd00::1\n", "")}, "no IPv4 gateway"),
+])
+def test_an_undeterminable_gateway_stops_the_bring_up_and_names_the_setting(outputs, needle):
+    run, _ = _run(outputs)
+    with pytest.raises(bindaddr.BindAddressError) as e:
+        bindaddr.detect_gateway(run=run)
+    assert needle in str(e.value) and "SLT_BIND_ADDRESS" in str(e.value)
+
+
+def test_a_missing_docker_binary_surfaces_as_docker_unavailable(monkeypatch):
+    def run(argv, **kw):
+        raise FileNotFoundError("docker")
+    with pytest.raises(FileNotFoundError):          # dockercmd's contract: callers map it
+        bindaddr.detect_gateway(run=run)
+    monkeypatch.setenv("SLT_KEEP_SERVICES", "1")
+    monkeypatch.delenv("SLT_BIND_ADDRESS", raising=False)
+    monkeypatch.setattr(bindaddr, "_cached_gateway", lambda: run([]))
+    import livetest.services as services_mod
+    from livetest.registry import load_service
+    with pytest.raises(services_mod.DockerUnavailable):
+        services_mod._default_compose_up(load_service("mysql"))
+
+
+# ------------------------------------------------------------------ the harness passes it to compose up
+def test_a_service_bring_up_runs_compose_with_the_bind_env(monkeypatch):
+    monkeypatch.setenv("SLT_KEEP_SERVICES", "1")          # a single `up` call, no reset
+    monkeypatch.delenv("SLT_BIND_ADDRESS", raising=False)
+    monkeypatch.setattr(bindaddr, "_cached_gateway", lambda: "172.17.0.1")
+    import livetest.services as services_mod
+    from livetest.registry import load_service
+    seen = []
+
+    def fake_run(argv, **kw):
+        seen.append((argv, kw.get("env")))
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+    monkeypatch.setattr(services_mod.subprocess, "run", fake_run)
+    services_mod._default_compose_up(load_service("mysql"))
+    ups = [env for argv, env in seen if "up" in argv]
+    assert ups and ups[0]["SLT_BIND_ADDRESS"] == "127.0.0.1"
+    assert ups[0]["SLT_BIND_GATEWAY"] == "172.17.0.1"
+
+
+def test_the_cluster_bring_up_runs_compose_with_the_bind_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("SLT_BIND_ADDRESS", "10.9.8.7")
+    monkeypatch.delenv("SLT_BIND_GATEWAY", raising=False)
+    monkeypatch.delenv("SLT_STRIIM_TRYOUT_JARS", raising=False)
+    seen = {}
+
+    def run(argv, cwd=None):
+        seen["argv"] = argv
+        seen["env"] = {k: os.environ.get(k) for k in ("SLT_BIND_ADDRESS", "SLT_BIND_GATEWAY")}
+    sp.cluster_up(tmp_path, {"STRIIM_VERSION": "5.4.2"}, run=run)
+    assert "up" in seen["argv"]
+    assert seen["env"] == {"SLT_BIND_ADDRESS": "10.9.8.7", "SLT_BIND_GATEWAY": "10.9.8.7"}
+    assert os.environ.get("SLT_BIND_GATEWAY") is None          # restored after the call
+
+
+def test_a_prefixed_stack_reports_each_unset_port_variable_once():
+    from livetest import preflight
+    missing = preflight.missing_port_overrides(["kafka"], env={"SLT_STACK_PREFIX": "alt"})
+    names = [var for _svc, var, _default in missing]
+    assert names == sorted(set(names), key=names.index)               # no duplicates
+    assert set(names) == {"SLT_ZOOKEEPER_CLIENT_PORT", "SLT_KAFKA_HOST_PORT",
+                          "SLT_KAFKA_DOCKER_HOST_PORT", "SLT_SCHEMA_REGISTRY_HOST_PORT"}

@@ -849,10 +849,12 @@ def cluster_up(striim_dir: Path, release: dict | None = None, run=None, progress
     derived = {v: enriched[v] for v in _LICENSE_VARS if sources[v] == "derived"}
     if progress and derived:
         progress("cluster", f"license config derived from STRIIM_HOME: {', '.join(sorted(derived))}")
-    from livetest import tryout
+    from livetest import bindaddr, paths, tryout
     tryouts = tryout.configured()
-    with _env_override({"STRIIM_VERSION": version, **derived}), _tryout_override(tryouts, version, query_run) \
-            as (files, up_flags):
+    # Where the published ports bind (SLT_BIND_ADDRESS; this machine and its containers by default).
+    bind = bindaddr.compose_env(paths.effective_env(os.environ))
+    with _env_override({"STRIIM_VERSION": version, **derived, **bind}), \
+            _tryout_override(tryouts, version, query_run) as (files, up_flags):
         # --remove-orphans: renaming a compose SERVICE strands its container exactly as
         # renaming the project does -- compose stops managing the old one but leaves it
         # RUNNING. Upgrading past the slt-striim-node -> slt-node rename would otherwise

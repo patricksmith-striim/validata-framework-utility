@@ -84,6 +84,7 @@ Start from your repository's `.env.example`. `striim-test doctor` lists the sett
 | `STRIIM_BUILD_<version>` | shell, matrix file | unset | The build matrix: one line per Striim release you build for, the version with `_` for `.` and an install path as the value, for example `STRIIM_BUILD_5_4_2=/opt/striim-5.4.2`. A relative path is taken from the matrix file's folder. The releases it names, with `STRIIM_HOME`'s, decide the version suffix of every jar's file name ([TESTING-YOUR-JAVA.md](TESTING-YOUR-JAVA.md)). |
 | `SLT_BUILD_MATRIX_ENV` | shell | `.env` in the project root | The file the build matrix is read from; a relative path is taken from the project root. |
 | `FTC_PUBLISHER_RELEASES_ENV` | shell | unset | Deprecated older name for `SLT_BUILD_MATRIX_ENV`, read only when that is unset; it will be removed in a later release. |
+| `SLT_BIND_ADDRESS` | shell, `.env`, machine | unset: this machine and its containers | The host address every service port the framework starts is published on, for example `0.0.0.0` for every interface. Unset, a framework run publishes on `127.0.0.1` and, on a Linux engine, the Docker bridge gateway that containers reach the host on; nothing is reachable from another machine, so forward a port over SSH. A plain `docker compose up` with it unset publishes on every interface, as before ([SERVICES.md](SERVICES.md)). |
 
 ## The Docker Striim cluster
 

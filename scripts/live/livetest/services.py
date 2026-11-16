@@ -10,7 +10,7 @@ from pathlib import Path
 from filelock import FileLock, Timeout
 
 from livetest import paths, service_healing, drivers, pgidle
-from livetest import dockercmd, lockdir, stack
+from livetest import bindaddr, dockercmd, lockdir, stack
 from livetest import striim_provision
 from livetest.registry import load_service, ServiceDef
 
@@ -356,6 +356,11 @@ def _default_compose_up(defn: ServiceDef, progress=None) -> None:
     # its context carries deps/ (15 GB), so the same no-op check costs ~152s on a cold BuildKit
     # context (1.8s warm, but which you get is not predictable) -- see that module for how
     # staleness is detected there instead.
+    # Where the published ports bind: SLT_BIND_ADDRESS, else this machine and its containers only.
+    try:
+        cenv.update(bindaddr.compose_env(cenv))
+    except FileNotFoundError as e:
+        raise DockerUnavailable(f"docker not found: {e}") from e
     argv = ["docker", "compose", "-f", str(compose), "up", "-d", "--wait"]
     build_required = drivers.hook(defn, "build_required")
     if build_required is None or build_required(cenv):

@@ -33,6 +33,16 @@ it found. To move a service to another host port (the default is taken), set its
 setting in `.env`; the container and every client move together, and `striim-test doctor` names
 the setting when the port is busy.
 
+**Who else can reach them.** The credentials above are fixed and public, so a run publishes each
+port only where this machine and its containers reach it: `127.0.0.1`, and on a Linux engine also
+the Docker bridge gateway, which is where `host.docker.internal` leads. Docker Desktop needs only
+`127.0.0.1`. Another machine on the network reaches none of them; forward a port over SSH
+(`ssh -L 5432:localhost:5432 <this machine>`). To publish on one address of your choosing, set
+`SLT_BIND_ADDRESS` (`0.0.0.0` is every interface), for example on a host that serves the services
+to other machines. A Linux daemon configured with its own `host-gateway-ip` also needs it. Compose
+files run by hand, without the framework and with `SLT_BIND_ADDRESS` unset, publish on every
+interface as they always did.
+
 ## Quick reference
 
 | Service (`requires:`) | Runs as | CDC | Host port | Routes | Use your own: set |

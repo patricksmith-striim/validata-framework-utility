@@ -145,6 +145,12 @@ SECTIONS = (
         ("FTC_PUBLISHER_RELEASES_ENV", "unset",
          "Deprecated older name for `SLT_BUILD_MATRIX_ENV`, read only when that is unset; it will "
          "be removed in a later release."),
+        ("SLT_BIND_ADDRESS", "unset: this machine and its containers",
+         "The host address every service port the framework starts is published on, for example "
+         "`0.0.0.0` for every interface. Unset, a framework run publishes on `127.0.0.1` and, on a "
+         "Linux engine, the Docker bridge gateway that containers reach the host on; nothing is "
+         "reachable from another machine, so forward a port over SSH. A plain `docker compose up` "
+         "with it unset publishes on every interface, as before ([SERVICES.md](SERVICES.md))."),
     )),
     ("The Docker Striim cluster", (
         ("SLT_STRIIM_PRIMARY_CPUS", None,
@@ -269,7 +275,8 @@ RETIRED = {"SLT_MODE": "SLT_FRAMEWORK_MODE", "SLT_FRAMEWORK": "SLT_FRAMEWORK_HOM
 NOT_SETTINGS = {"SLT_BIGQUERY_GOMEMLIMIT", "STRIIM_RELEASE", "STRIIM_VERSION", "STRIIM_SERIES", "STRIIM_WEB_URL", "TID",
                 "STRIIM_PRIMARY_SERVER", "STRIIM_SECONDARY_SERVER", "STRIIM_AGENT_SERVER",
                 "PYTEST_XDIST_WORKER", "JAVA_HOME", "SPANNER_EMULATOR_HOST", "KAFKA_BROKER_ID",
-                "KAFKA_ZOOKEEPER_CONNECT", "BIGTABLE_EMULATOR_HOST"}
+                "KAFKA_ZOOKEEPER_CONNECT", "BIGTABLE_EMULATOR_HOST",
+                "SLT_BIND_GATEWAY"}
 
 NAMES = {"postgres": "PostgreSQL", "oracle": "Oracle", "mssql": "SQL Server", "sqlserver": "SQL Server",
          "mysql": "MySQL", "mariadb": "MariaDB", "vertica": "Vertica", "kafka": "Kafka", "spanner": "Spanner emulator",

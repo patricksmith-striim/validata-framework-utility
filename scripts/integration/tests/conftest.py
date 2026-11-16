@@ -32,3 +32,11 @@ def _no_pre_up(monkeypatch):
     # The tier reads the project manifest's servicesRoots (inttest.resources.consumer_roots):
     # a developer's GOLD_TARGETS must not add consumer services to a hermetic test.
     monkeypatch.delenv("GOLD_TARGETS", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _no_bind_gateway_probe(monkeypatch):
+    """A harness `compose up` asks Docker for the bridge gateway (livetest.bindaddr). Docker is a stub
+    here, so the answer is fixed at Docker Desktop's (none); probe tests call detect_gateway."""
+    from livetest import bindaddr
+    monkeypatch.setattr(bindaddr, "_cached_gateway", lambda: None)

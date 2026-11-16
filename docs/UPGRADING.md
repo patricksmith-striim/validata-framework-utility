@@ -170,6 +170,18 @@ if they must.
 New. `0` makes a shared run fail a case whose service is not running instead of starting it, and
 names the start command. Leave it unset (or `1`) to keep today's behaviour.
 
+### Service ports bind locally (breaking for remote clients)
+
+A framework run now publishes every service port on `127.0.0.1`, and on a Linux engine also on
+the Docker bridge gateway, so only this machine and its containers reach them. Before, they were
+on every interface. If another machine connects to these services (a remote console, a laptop
+reaching a cloud host's databases, a Striim on a second host), either forward the ports over SSH
+or set `SLT_BIND_ADDRESS` on the host that runs them (`0.0.0.0` for every interface, as before).
+Compose files you run with plain `docker compose` and `SLT_BIND_ADDRESS` unset still publish on
+every interface. The first framework bring-up after the upgrade recreates each running service
+container, because its port bindings changed; do it when no other run uses the stack. On Linux, a
+daemon configured with its own `host-gateway-ip` needs `SLT_BIND_ADDRESS` set to that address.
+
 ### JDWP debugger off by default
 
 The Striim primary no longer runs a Java debugger on port 8787. To debug it, set

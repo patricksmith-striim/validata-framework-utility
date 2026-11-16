@@ -278,7 +278,7 @@ checkouts started. Use it only when this Docker is yours alone.
 
 ## If it did not work
 
-- **`Bind for 0.0.0.0:5432 failed: port is already allocated`**: something else on this machine uses
+- **`Bind for 127.0.0.1:5432 failed: port is already allocated`**: something else on this machine uses
   the port. Set another in `.env`, for Postgres `SLT_PG_HOST_PORT=55432`; the run and Striim both
   follow it. Each service's setting is in [SERVICES.md](SERVICES.md).
 - **`PermissionError: … /tmp/slt-locks/…`, or "the shared lock dir … belongs to …"**: every user on a

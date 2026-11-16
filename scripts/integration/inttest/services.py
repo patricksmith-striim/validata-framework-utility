@@ -325,7 +325,10 @@ def compose_up(service_name: str, lock: FileLock) -> None:
     if shared_reuse(service_name):
         return
     from livetest import pgidle
+    from livetest import bindaddr
     env = _compose_up_env(service_name)
+    # Where the published ports bind: SLT_BIND_ADDRESS, else this machine and its containers only.
+    env.update(bindaddr.compose_env(env))
     sql = pgidle.policy_sql(env, "INT_PG_IDLE_TRANSACTION_TIMEOUT_MS", "intdb") if service_name == "postgres" else None
     compose = _checked_compose_file(service_name)
     dockercmd.run(["docker", "compose", "-f", str(compose), "up", "-d", "--wait"],
