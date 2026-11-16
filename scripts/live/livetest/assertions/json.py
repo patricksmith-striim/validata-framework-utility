@@ -18,7 +18,7 @@ class JsonSpecError(Exception):
 #: Every key an `assert.json` spec may carry: what assert_json reads, plus the plugin's routing
 #: keys (`_spec_route` reads source_db and target_db before db).
 JSON_SPEC_KEYS = frozenset({"target", "db", "key", "column", "match", "source_db", "target_db",
-                            "stable_seconds"})
+                            "unordered", "stable_seconds"})
 
 
 def parse_json_specs(raw: list) -> list:
