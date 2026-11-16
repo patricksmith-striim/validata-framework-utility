@@ -43,6 +43,10 @@ if SC.get("gcs_edges"):
     P._gcs_endpoint_ip = lambda ctx, run=None: "127.0.0.1"
     P._gcs_admin = lambda base: SimpleNamespace(delete_bucket=lambda b: None)
     P.ensure_fake_gcp_key = lambda *a, **k: None
+if SC.get("bigtable_edges"):
+    # the bigtable service's own edge: one admin under both routes, no emulator
+    _bt_admin = SimpleNamespace(list_owned_tables=lambda: [])
+    P._bigtable_admins = lambda base: [(_bt_admin, "bigtable-target"), (_bt_admin, "bigtable-source")]
 '''
 
 # tier -> (lines added under assert:, top-level lines, function replaced, a spec value it must receive)
@@ -54,6 +58,8 @@ TIERS = {
     "jmx": ("  jmx:\n    - bean: {domain: com.example, type: FooOp, component: op1}\n      attributes: {DeclaredCount: 1}\n",
             "", "P.assert_jmx", "DeclaredCount"),
     "gcs": ("  gcs:\n    - {bucket: declaredbucket, object: o, size: 1}\n", "", "P.assert_gcs", "declaredbucket"),
+    "bigtable": ("  bigtable:\n    - {table: declaredtable, db: bigtable-target, expected: []}\n", "",
+                 "P.assert_bigtable", "declaredtable"),
     "placement": ("  placement:\n    - {flow: '${NS}.declaredflow', node: primary}\n", "",
                   "node_fault.assert_placement", "declaredflow"),
     # the top-level key, polled for a terminal HALT and recorded as tier `halt`
@@ -69,6 +75,8 @@ def _edit(tier):
         assert text.rstrip().endswith("smoke: true"), text
         if tier == "gcs":
             text = text.replace("requires: [postgres]", "requires: [postgres, gcs]")
+        if tier == "bigtable":
+            text = text.replace("requires: [postgres]", "requires: [postgres, bigtable]")
         return text.rstrip() + "\n" + assert_lines + top_lines
     return edit
 
@@ -79,7 +87,8 @@ def _prepare(root, name):
 
 
 def _scenario(tier, **extra):
-    return {"tier_patch": {TIERS[tier][2]: tier}, "gcs_edges": tier == "gcs", **extra}
+    return {"tier_patch": {TIERS[tier][2]: tier}, "gcs_edges": tier == "gcs",
+            "bigtable_edges": tier == "bigtable", **extra}
 
 
 @pytest.mark.parametrize("tier", ALL)
