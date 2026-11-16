@@ -908,6 +908,9 @@ def pytest_runtest_makereport(item, call):
         rep._int_case = True
         exc = call.excinfo.value if call.excinfo is not None else None
         rep._int_env_skip = exc.cause if isinstance(exc, EnvSkip) else ""
+        leaks = getattr(item, "_slt_teardown_leaks", None)
+        if leaks and rep.when == "teardown":
+            rep._int_teardown_leaks = list(leaks)
         rec = _case_recorder(item.config)
         if rec is not None:
             rec.mark(item, rep)
@@ -1665,6 +1668,38 @@ def _build_operator_jar(name: str, op_jar_ref: str, report=None):
         # A missing build prerequisite (no `mvn`, no JDK for the release), or a reused jar
         # stamped for another release that needs `mvn clean`.
         _env_skip("build", f"{name}: cannot build operator jar {op_jar_ref!r}: {e}")
+
+
+def _teardown_leak(item, step: str, error: Exception) -> None:
+    """A per-case teardown step that failed and left the case's objects behind. Shown on the
+    terminal now, listed again in the session's summary (`pytest_terminal_summary`) and counted in
+    the case record (`teardownLeaks`); the case keeps its outcome, and the next case's setup reset
+    tries again."""
+    leaks = getattr(item, "_slt_teardown_leaks", None)
+    if leaks is None:
+        leaks = item._slt_teardown_leaks = []
+    leaks.append({"step": step, "error": repr(error)})
+    _terminal_emit(item.config, f"[integration] WARNING: failed to {step} for {item.manifest.name}: "
+                                f"{error!r}")
+
+
+def pytest_terminal_summary(terminalreporter, exitstatus, config):
+    """The cases whose teardown left objects behind (`_teardown_leak`), from every process: the
+    leaks travel on the reports, so an xdist controller lists its workers' too."""
+    leaks = {}
+    for reports in terminalreporter.stats.values():
+        for report in reports:
+            found = getattr(report, "_int_teardown_leaks", None)
+            if found:
+                leaks[report.nodeid] = found
+    if not leaks:
+        return
+    terminalreporter.section("integration teardown left objects behind", sep="-", yellow=True)
+    for nodeid, found in leaks.items():
+        for leak in found:
+            terminalreporter.write_line(f"{nodeid}: failed to {leak['step']}: {leak['error']}")
+    terminalreporter.write_line(f"{len(leaks)} case(s) left objects behind; the next run's setup reset "
+                                f"tries again. Their case records count them (teardownLeaks).")
 
 
 def _terminal_emit(config, text: str) -> None:
@@ -2738,14 +2773,12 @@ class IntYamlItem(pytest.Item):
                 else:
                     self._pg_admin.reset_schemas()
             except Exception as e:  # noqa: BLE001 - teardown must not mask the real outcome
-                print(f"[integration] WARNING: failed to reset Postgres test objects "
-                      f"for {self.manifest.name}: {e!r}")
+                _teardown_leak(self, "reset Postgres test objects", e)
         if self._oracle_prefix is not None:
             try:
                 _drop_oracle_test_prefix(self._oracle_prefix)
             except Exception as e:  # noqa: BLE001
-                print(f"[integration] WARNING: failed to drop Oracle tables prefixed "
-                      f"{self._oracle_prefix!r}: {e!r}")
+                _teardown_leak(self, f"drop Oracle tables prefixed {self._oracle_prefix!r}", e)
         if self._spanner_prefix is not None:
             # Only drops this test's ${TID}-prefixed tables (mirrors scripts/live's
             # _DDL_TEARDOWN_PREFIX_TOKENS behavior for spanner) -- deliberately NOT
@@ -2762,8 +2795,7 @@ class IntYamlItem(pytest.Item):
             except spanneradmin_mod.RealSpannerError:
                 raise  # real Spanner: objects left in a shared database fail the case
             except Exception as e:  # noqa: BLE001 - teardown must not mask the real outcome
-                print(f"[integration] WARNING: failed to drop Spanner tables prefixed "
-                      f"{self._spanner_prefix!r}: {e!r}")
+                _teardown_leak(self, f"drop Spanner tables prefixed {self._spanner_prefix!r}", e)
 
 
 # ============================================================================
@@ -3188,8 +3220,7 @@ class PerfYamlItem(pytest.Item):
                 else:
                     pg.reset_schemas()
             except Exception as e:  # noqa: BLE001 - teardown must not mask the real outcome
-                print(f"[integration] WARNING: failed to reset Postgres test objects "
-                      f"for {m.name}: {e!r}")
+                _teardown_leak(self, "reset Postgres test objects", e)
         if "oracle" in m.requires and hasattr(self, "tokens"):
             # ${TID_ORACLE}, NOT ${TID_ORACLE_DB} (removed -- see tokens.isolation_tokens):
             # empty in a serial run (SPEC §6), same as IntYamlItem's _oracle_prefix, so
@@ -3200,7 +3231,7 @@ class PerfYamlItem(pytest.Item):
                 try:
                     _drop_oracle_test_prefix(tid_oracle)
                 except Exception as e:  # noqa: BLE001
-                    print(f"[integration] WARNING: failed to drop Oracle tables for {m.name}: {e!r}")
+                    _teardown_leak(self, f"drop Oracle tables prefixed {tid_oracle!r}", e)
         if "spanner" in m.requires and hasattr(self, "tokens") and self.tokens.get("TID"):
             # Mirrors IntYamlItem's Spanner branch exactly, including its choice NOT to fall
             # back to a blanket prefix="" drop in serial runs: ${TID} is empty there by design,
@@ -3215,8 +3246,7 @@ class PerfYamlItem(pytest.Item):
             except spanneradmin_mod.RealSpannerError:
                 raise  # real Spanner: objects left in a shared database fail the case
             except Exception as e:  # noqa: BLE001 - teardown must not mask the real outcome
-                print(f"[integration] WARNING: failed to drop Spanner tables prefixed "
-                      f"{self.tokens['TID']!r} for {m.name}: {e!r}")
+                _teardown_leak(self, f"drop Spanner tables prefixed {self.tokens['TID']!r}", e)
 
 
 def pytest_collection_modifyitems(config, items):

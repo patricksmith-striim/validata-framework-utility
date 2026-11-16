@@ -68,6 +68,11 @@ After each test:
 
 Cleanup is skipped if a test fails, allowing manual debugging.
 
+A YAML case's teardown step that fails (`_teardown_leak`) does not change the case's outcome. It
+is printed on the terminal as it happens, listed again under "integration teardown left objects
+behind" at the end of the run (an xdist controller lists its workers' too), and counted in the
+case record's `teardownLeaks`. The next case's setup reset tries again.
+
 ## Fixtures
 
 Core fixtures (from `conftest.py`):

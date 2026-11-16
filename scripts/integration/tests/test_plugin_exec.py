@@ -29,8 +29,12 @@ def log(event, **kw):
 
 
 class _Pg:
+    resets = 0
     def ensure_setup(self): pass
-    def reset_schemas(self): pass
+    def reset_schemas(self):
+        _Pg.resets += 1             # the first is the setup reset, the second the teardown's
+        if SC.get("teardown_reset_fails") and _Pg.resets > 1:
+            raise RuntimeError("connection to server lost during teardown")
     def reset_test_objects(self, tid): pass
 
 
