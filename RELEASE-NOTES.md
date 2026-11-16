@@ -158,6 +158,11 @@ the last release; the release makes it that version's entry.
   leads). They were published on every interface, with fixed, public credentials.
   `SLT_BIND_ADDRESS` publishes on one address you choose (`0.0.0.0` is every interface). A compose
   file run by hand with `SLT_BIND_ADDRESS` unset still publishes on every interface.
+- **Third-party Striim image downloads are checked against shipped SHA-256 digests**
+  (`scripts/live/services/striim/deps.sha256`): the JDBC drivers, the JMX agent and Oracle Instant
+  Client. A download or a file already present that does not match stops the run, naming it. Each
+  Striim `.deb`, for which Striim publishes no checksum, is pinned the first time a machine sees it
+  and checked before every later build. Before, any non-empty file was trusted.
 - **Integration: one test item per variant group.** A case with variants becomes several items,
   named `case[variant]` (`case[a+b]` when variants share a service). `-m <service>` now runs only
   that service's variants. Scripts or reports that name items by id see the new ids.

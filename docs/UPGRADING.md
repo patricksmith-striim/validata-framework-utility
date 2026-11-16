@@ -188,6 +188,14 @@ The Striim primary no longer runs a Java debugger on port 8787. To debug it, set
 `SLT_STRIIM_DEBUG=1`; the port is then published on `127.0.0.1` only, so from another machine
 forward it over SSH. A second stack no longer needs `SLT_STRIIM_DEBUG_HOST_PORT` unless both debug.
 
+### Striim dependency digests
+
+Third-party files under `scripts/live/services/striim/images/striim/deps/` must now match the
+digests in `scripts/live/services/striim/deps.sha256`. A copy that does not match (an old or
+partial download) stops the run, naming it; delete it and run again. Each `striim-*.deb` already
+there is pinned on the first run after the upgrade, in `deps/.slt-sha256-pins.json`. If Striim
+republishes a package under the same name, delete the file and its entry in that record.
+
 ## v0.3.2
 
 ### Whole-number decimals in integration goldens (breaking)

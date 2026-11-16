@@ -45,6 +45,12 @@ DEPS_MANIFEST_SCHEMA_VERSION = 1
 _DEPS_MANIFEST_KEYS = frozenset({"schemaVersion", "directory", "sha256"})
 # The verified installer identity, recorded in the recipe's files/ (-> /slt-build-inputs).
 INSTALLER_IDENTITY_FILE = "slt-installer-identity.json"
+# Checkout mode: the SHA-256 of each third-party file download-dependencies.sh fetches, shipped with
+# the framework (`<sha256>  <filename>` lines; the script reads the same file). Striim publishes no
+# checksums for its .debs, so a file the list does not name is pinned the first time this machine
+# sees it, in DEPS_PINS_FILE beside it in deps/, and must match that pin on every later build.
+SHIPPED_DEP_DIGESTS = Path(__file__).resolve().parents[1] / "services" / "striim" / "deps.sha256"
+DEPS_PINS_FILE = ".slt-sha256-pins.json"
 
 # Teradata's JDBC driver is under Teradata's licence (use only with a licensed Teradata platform),
 # so it is never a required input: download-dependencies.sh fetches it only on this opt-in, and the
@@ -152,6 +158,98 @@ def load_striim_deps_manifest(path=None, env=None) -> tuple:
                 f"Striim deps manifest {mpath}: sha256 value for {name} is not a 64-hex digest")
         expected[name] = digest.lower()
     return ddir, expected
+
+
+def shipped_dep_digests(path=None) -> dict:
+    """{filename: sha256} from the shipped third-party digest list (SHIPPED_DEP_DIGESTS)."""
+    path = Path(path or SHIPPED_DEP_DIGESTS)
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise StriimDepsError(
+            f"cannot read the shipped dependency digests {path}: {exc.__class__.__name__}") from exc
+    digests = {}
+    for number, line in enumerate(text.splitlines(), 1):
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        parts = line.split()
+        if len(parts) != 2 or not _is_hex64(parts[0]):
+            raise StriimDepsError(f"{path}:{number}: expected `<sha256>  <filename>`")
+        digests[parts[1]] = parts[0].lower()
+    return digests
+
+
+def _read_dep_pins(path: Path) -> dict:
+    """{filename: sha256} recorded on first sight; {} when nothing is recorded yet. An unreadable
+    record is refused rather than replaced: rewriting it would trust whatever is present now."""
+    if path.is_symlink():
+        raise StriimDepsError(
+            f"{path} is a symlink; the dependency pin record is never read or written through one")
+    if not path.exists():
+        return {}
+    fix = "delete it to pin the files present now again"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, ValueError) as exc:
+        raise StriimDepsError(
+            f"cannot read the dependency pin record {path} ({exc.__class__.__name__}); {fix}") from exc
+    pins = data.get("sha256") if isinstance(data, dict) and data.get("schemaVersion") == 1 else None
+    if not isinstance(pins, dict) or not all(isinstance(k, str) and _is_hex64(v) for k, v in pins.items()):
+        raise StriimDepsError(
+            f"the dependency pin record {path} is not a schemaVersion 1 record of SHA-256 digests; {fix}")
+    return {k: v.lower() for k, v in pins.items()}
+
+
+def _write_dep_pins(path: Path, pins: dict) -> None:
+    data = json.dumps({"schemaVersion": 1, "sha256": dict(sorted(pins.items()))}, indent=1) + "\n"
+    tmp = path.with_name(f".{path.name}.tmp-{os.getpid()}-{os.urandom(4).hex()}")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o644)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(data)
+        os.replace(tmp, path)
+    except BaseException:
+        if tmp.is_symlink() or tmp.exists():
+            tmp.unlink()
+        raise
+
+
+def verify_checkout_deps(striim_dir: Path, version: str = _DEFAULT_STRIIM_VERSION) -> None:
+    """Checkout mode, after any download: every required file, and the Teradata driver when deps/
+    holds it, must match its shipped SHA-256 or, for a file the list does not name (the Striim
+    .debs), the digest recorded the first time this machine saw it. Every file is hashed on every
+    call, so a file that is merely present and non-empty is never trusted. Raises StriimDepsError
+    naming the first file that does not match; first-sight pins are recorded only when all match."""
+    d = _deps_dir(striim_dir)
+    shipped = shipped_dep_digests()
+    pins_path = d / DEPS_PINS_FILE
+    pins = _read_dep_pins(pins_path)
+    names = list(_required_deps(version))
+    if (d / TERADATA_JDBC_JAR).is_file():
+        names.append(TERADATA_JDBC_JAR)
+    new = {}
+    for name in names:
+        path = d / name
+        if not path.is_file():
+            raise StriimDepsError(f"missing Striim build dependency: {name}")
+        got = _sha256_of(path)
+        if name in shipped:
+            if got != shipped[name]:
+                raise StriimDepsError(
+                    f"digest mismatch for Striim build dependency: {name} does not match the SHA-256 "
+                    f"the framework ships in {Path(SHIPPED_DEP_DIGESTS).name}; delete {path} and run "
+                    f"again to download it again")
+        elif name in pins:
+            if got != pins[name]:
+                raise StriimDepsError(
+                    f"digest mismatch for Striim build dependency: {name} differs from the SHA-256 "
+                    f"recorded when this machine first saw it ({DEPS_PINS_FILE} in {d}); if Striim "
+                    f"republished the file, delete it and its entry there, then run again")
+        else:
+            new[name] = got
+    if new:
+        _write_dep_pins(pins_path, {**pins, **new})
 
 
 def _staged_ok(final: Path, digest: str) -> bool:
@@ -534,13 +632,15 @@ def ensure_deps(striim_dir: Path, release: dict | None = None, run=None, progres
         _gate_striim_deps(striim_dir, version)   # raises, naming SLT_STRIIM_DEPS_MANIFEST
     teradata_missing = (teradata_jdbc_opted_in()
                         and not (_deps_dir(striim_dir) / TERADATA_JDBC_JAR).is_file())
-    if deps_present(_deps_dir(striim_dir), version) and not teradata_missing:
-        return
-    if progress: progress("cluster", "downloading dependencies (one-time)")
-    print(f"[striim] downloading build dependencies for {version} (one-time)…")
-    with _env_override({"STRIIM_VERSION": version,
-                        TERADATA_JDBC_ENV: "1" if teradata_jdbc_opted_in() else None}):
-        run(["./download-dependencies.sh"], cwd=str(striim_dir))
+    if not (deps_present(_deps_dir(striim_dir), version) and not teradata_missing):
+        if progress: progress("cluster", "downloading dependencies (one-time)")
+        print(f"[striim] downloading build dependencies for {version} (one-time)…")
+        with _env_override({"STRIIM_VERSION": version,
+                            TERADATA_JDBC_ENV: "1" if teradata_jdbc_opted_in() else None}):
+            run(["./download-dependencies.sh"], cwd=str(striim_dir))
+    # Present is not verified: check the bytes, downloaded just now or long ago (FW-57).
+    if progress: progress("cluster", "verifying dependency digests")
+    verify_checkout_deps(striim_dir, version)
 
 def image_ref(version: str = _DEFAULT_STRIIM_VERSION, env=None) -> str:
     """The image tag for THIS stack: ``ec`` + ``slt-striim:5.4.0.6C`` -> ``ec-slt-striim:5.4.0.6C``.

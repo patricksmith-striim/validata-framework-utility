@@ -115,6 +115,13 @@ build cache and needs only the 5 GB.
 **Vendor drivers.** The JDBC drivers and other third-party files the first run downloads remain under
 their vendors' licenses, which apply to your use of them.
 
+**What is checked.** Each third-party file must match the SHA-256 the framework ships for it
+(`scripts/live/services/striim/deps.sha256`). A download that does not match is deleted, and a file
+already present that does not match stops the run, naming it. Striim publishes no checksums for
+its packages, so the first time this machine sees each `striim-*.deb` the run records its digest
+(`images/striim/deps/.slt-sha256-pins.json`) and checks it before every later build. If Striim
+republishes a package under the same name, delete the file and its entry there.
+
 **If you already have the installers,** skip the download: list them in a manifest and export its
 path from your shell.
 
