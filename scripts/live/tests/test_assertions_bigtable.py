@@ -3,7 +3,9 @@ import pytest
 from livetest.assertions import AssertionFailed
 from livetest.assertions.bigtable import (
     BigtableSpecError,
+    _cell_matches,
     _check_spec,
+    _rows_match,
     assert_bigtable,
     parse_bigtable_specs,
 )
@@ -252,3 +254,39 @@ def test_parse_keeps_an_explicit_route():
     from livetest.assertions.bigtable import parse_bigtable_specs
     specs = parse_bigtable_specs([{"table": "emp", "expected": [], "db": "bigtable-source"}])
     assert specs[0]["db"] == "bigtable-source"
+
+
+# A cell given as {"prefix": text} matches on its UTF-8 text (the marker's component name is only known
+# at run time). Values are hex, as the admin renders them.
+def test_prefix_cell_matches_the_start_of_its_text():
+    assert _cell_matches({"prefix": "SLT_run1."}, "SLT_run1.BtTarget".encode().hex())
+
+
+def test_prefix_cell_refuses_other_text():
+    assert not _cell_matches({"prefix": "SLT_run1."}, "SLT_run2.BtTarget".encode().hex())
+
+
+def test_plain_cell_still_needs_the_exact_hex():
+    assert _cell_matches("616e6e", "616e6e")
+    assert not _cell_matches("616e6e", "626f62")
+
+
+def test_prefix_cell_with_non_utf8_bytes_does_not_match():
+    assert not _cell_matches({"prefix": "x"}, "ff")
+
+
+def test_prefix_must_be_the_only_key():
+    with pytest.raises(BigtableSpecError):
+        _cell_matches({"prefix": "x", "suffix": "y"}, "78")
+
+
+def test_rows_match_with_a_prefix_cell_in_a_row():
+    want = [{"row": "31", "cells": {"cf:id": "31", "cf:m": {"prefix": "SLT_run1."}}}]
+    got = [{"row": "31", "cells": {"cf:id": "31", "cf:m": "SLT_run1.BtTarget".encode().hex()}}]
+    assert _rows_match(want, got)
+
+
+def test_rows_match_refuses_a_missing_cell_even_with_a_prefix():
+    want = [{"row": "31", "cells": {"cf:id": "31", "cf:m": {"prefix": "SLT_run1."}}}]
+    got = [{"row": "31", "cells": {"cf:id": "31"}}]
+    assert not _rows_match(want, got)

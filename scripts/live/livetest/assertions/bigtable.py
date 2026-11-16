@@ -43,15 +43,44 @@ def parse_bigtable_specs(raw: list) -> list[dict]:
     return raw
 
 
+def _cell_matches(want, got_hex: str) -> bool:
+    """One cell's value. A plain hex string must equal the actual hex exactly. A cell given as
+    {"prefix": text} matches when its bytes, read as UTF-8, start with `text`: for a value the
+    writer computes from a name known only at run time (a marker holds its component's name)."""
+    if isinstance(want, dict):
+        if set(want) != {"prefix"} or not isinstance(want["prefix"], str):
+            raise BigtableSpecError(f"a cell prefix must be {{'prefix': text}}, got {want!r}")
+        try:
+            return bytes.fromhex(got_hex).decode("utf-8").startswith(want["prefix"])
+        except (ValueError, UnicodeDecodeError):
+            return False
+    return want == got_hex
+
+
+def _rows_match(want: list, got: list) -> bool:
+    """The same rows, in the same order: each row's key, each row's cell names, and each cell's
+    value by `_cell_matches`."""
+    if len(want) != len(got):
+        return False
+    for w, g in zip(want, got):
+        if w.get("row") != g.get("row") or set(w.get("cells", {})) != set(g.get("cells", {})):
+            return False
+        for cell, value in w.get("cells", {}).items():
+            if not _cell_matches(value, g["cells"][cell]):
+                return False
+    return True
+
+
 def _evaluate(admin, spec: dict, timeout=None):
     """Read the table whole and compare to `expected`; also return the expected/actual row-list
     snapshots for the sidecar record. Mirrors inttest.dbroutes.assert_target: the comparison is on
-    the `read_all` row list (inttest wraps both sides identically as `{table, rows}`, equivalent)."""
+    the `read_all` row list (inttest wraps both sides identically as `{table, rows}`, equivalent).
+    A cell value may be {"prefix": text} (see _cell_matches)."""
     got = list(admin.read_all(spec["table"], timeout=timeout))
     want = list(spec["expected"])
     expected = {"kind": "rows", "rows": want}
     actual = {"kind": "rows", "rows": got}
-    if got != want:
+    if not _rows_match(want, got):
         detail = (f"{spec['table']}: read {len(got)} row(s), expected {len(want)}; "
                   f"actual {got} != expected {want}")
         return False, detail, expected, actual

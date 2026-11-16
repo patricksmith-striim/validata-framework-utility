@@ -2187,6 +2187,10 @@ assert:
         - {row: "3031", cells: {"emp:name": "616c696365"}}
 ```
 
+A cell value may be `{prefix: <text>}` instead of hex: it matches a cell whose UTF-8 text starts with
+`<text>`, for a value known only at run time (a bidirectional marker holds its component's name).
+Every other cell still needs its exact hex, and the row keys and cell names must match exactly.
+
 Each spec reads its table whole (`CellsColumnLimitFilter(num_cells=1)`, the newest cell per column)
 and compares the row list to `expected`, polling until it matches or `timeout:` elapses. `expected`
 is `[{"row": "<hex key>", "cells": {"<fam>:<qual>": "<hex value>"}}]`, the same shape as the
