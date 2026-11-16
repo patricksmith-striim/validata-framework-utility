@@ -413,8 +413,11 @@ def test_exec_failed_transaction_pool_close_fails_a_green_case(run_case):
     assert "transaction session s1 could not be closed: connection reset" in run.junit()[2]
 
 
-def test_exec_blockless_teardown_failure_keeps_the_case_outcome(run_case):
+def test_exec_blockless_teardown_failure_fails_the_case(run_case):
+    # A case without lifecycle: whose unowned teardown cannot delete what it created fails its
+    # cleanup (unowned-teardown-failed), as tests/lifecycle/test_blockless_teardown.py pins.
     run = run_case("legacy", {"unowned_teardown_fail": True}, args=("-s",))
-    _agree(run, "passed")
+    _agree(run, "failed")
     assert "teardown_unowned" in run.names()
+    assert "unowned-teardown-failed" in run.junit()[2]
     assert "best-effort teardown failed" in run.text and "permission denied for schema qatarget" in run.text
