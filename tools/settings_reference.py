@@ -251,12 +251,12 @@ FRAMEWORK_SET = (
 )
 RETIRED = {"SLT_MODE": "SLT_FRAMEWORK_MODE", "SLT_FRAMEWORK": "SLT_FRAMEWORK_HOME"}
 # Names the code holds that are not settings: tokens it fills in itself, and variables other
-# programs define (pytest-xdist's worker id, the JDK's JAVA_HOME, the Spanner client's emulator
-# host, a Kafka container's own environment).
+# programs define (pytest-xdist's worker id, the JDK's JAVA_HOME, the Spanner and Bigtable
+# clients' emulator hosts, a Kafka container's own environment).
 NOT_SETTINGS = {"SLT_BIGQUERY_GOMEMLIMIT", "STRIIM_RELEASE", "STRIIM_VERSION", "STRIIM_SERIES", "STRIIM_WEB_URL", "TID",
                 "STRIIM_PRIMARY_SERVER", "STRIIM_SECONDARY_SERVER", "STRIIM_AGENT_SERVER",
                 "PYTEST_XDIST_WORKER", "JAVA_HOME", "SPANNER_EMULATOR_HOST", "KAFKA_BROKER_ID",
-                "KAFKA_ZOOKEEPER_CONNECT"}
+                "KAFKA_ZOOKEEPER_CONNECT", "BIGTABLE_EMULATOR_HOST"}
 
 NAMES = {"postgres": "PostgreSQL", "oracle": "Oracle", "mssql": "SQL Server", "sqlserver": "SQL Server",
          "mysql": "MySQL", "mariadb": "MariaDB", "vertica": "Vertica", "kafka": "Kafka", "spanner": "Spanner emulator",
