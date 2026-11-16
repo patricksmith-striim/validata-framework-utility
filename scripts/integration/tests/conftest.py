@@ -39,4 +39,4 @@ def _no_bind_gateway_probe(monkeypatch):
     """A harness `compose up` asks Docker for the bridge gateway (livetest.bindaddr). Docker is a stub
     here, so the answer is fixed at Docker Desktop's (none); probe tests call detect_gateway."""
     from livetest import bindaddr
-    monkeypatch.setattr(bindaddr, "_cached_gateway", lambda: None)
+    monkeypatch.setattr(bindaddr, "_cached_gateway", lambda run=None: None)

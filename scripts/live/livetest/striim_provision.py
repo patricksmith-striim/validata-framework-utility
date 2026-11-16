@@ -952,7 +952,7 @@ def cluster_up(striim_dir: Path, release: dict | None = None, run=None, progress
     from livetest import bindaddr, paths, tryout
     tryouts = tryout.configured()
     # Where the published ports bind (SLT_BIND_ADDRESS; this machine and its containers by default).
-    bind = bindaddr.compose_env(paths.effective_env(os.environ))
+    bind = bindaddr.compose_env(paths.effective_env(os.environ), run=query_run)
     with _env_override({"STRIIM_VERSION": version, **derived, **bind}), \
             _tryout_override(tryouts, version, query_run) as (files, up_flags):
         # --remove-orphans: renaming a compose SERVICE strands its container exactly as

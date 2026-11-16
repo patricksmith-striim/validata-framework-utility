@@ -17,6 +17,8 @@ import livetest
 from livetest import bindaddr
 from livetest import striim_provision as sp
 
+_DETECT = bindaddr._cached_gateway       # the real one; the suite's conftest stubs it per test
+
 REPO = Path(livetest.__file__).resolve().parents[3]
 LIVE = REPO / "scripts" / "live"
 INTEG = REPO / "scripts" / "integration"
@@ -138,7 +140,7 @@ def _run(outputs):
 
 
 def test_an_explicit_bind_address_is_the_only_address(monkeypatch):
-    monkeypatch.setattr(bindaddr, "_cached_gateway", lambda: pytest.fail("detected"))
+    monkeypatch.setattr(bindaddr, "_cached_gateway", lambda run=None: pytest.fail("detected"))
     assert bindaddr.compose_env({"SLT_BIND_ADDRESS": " 10.1.2.3 "}) == {
         "SLT_BIND_ADDRESS": "10.1.2.3", "SLT_BIND_GATEWAY": "10.1.2.3"}
     assert bindaddr.compose_env({"SLT_BIND_ADDRESS": "0.0.0.0", "SLT_BIND_GATEWAY": "172.17.0.1"}) == {
@@ -152,9 +154,9 @@ def test_a_bind_address_that_is_not_an_ipv4_address_is_refused(bad):
 
 
 def test_unset_bind_address_publishes_on_loopback_and_the_detected_gateway(monkeypatch):
-    monkeypatch.setattr(bindaddr, "_cached_gateway", lambda: "172.17.0.1")
+    monkeypatch.setattr(bindaddr, "_cached_gateway", lambda run=None: "172.17.0.1")
     assert bindaddr.compose_env({}) == {"SLT_BIND_ADDRESS": "127.0.0.1", "SLT_BIND_GATEWAY": "172.17.0.1"}
-    monkeypatch.setattr(bindaddr, "_cached_gateway", lambda: None)
+    monkeypatch.setattr(bindaddr, "_cached_gateway", lambda run=None: None)
     assert bindaddr.compose_env({"SLT_BIND_ADDRESS": "", "SLT_BIND_GATEWAY": "0.0.0.0"}) == {
         "SLT_BIND_ADDRESS": "127.0.0.1", "SLT_BIND_GATEWAY": "127.0.0.1"}
 
@@ -175,9 +177,8 @@ def test_a_linux_engine_publishes_on_the_default_bridge_gateway():
 
 
 @pytest.mark.parametrize("outputs, needle", [
-    ({"info": (1, "", "Cannot connect to the Docker daemon")}, "Cannot connect to the Docker daemon"),
-    ({"info": (124, "", "")}, "docker info"),
     ({"info": (0, "Ubuntu\n", ""), "network": (1, "", "network bridge not found")}, "network bridge not found"),
+    ({"info": (0, "Ubuntu\n", ""), "network": (124, "", "")}, "timed out"),
     ({"info": (0, "Ubuntu\n", ""), "network": (0, "fd00::1\n", "")}, "no IPv4 gateway"),
 ])
 def test_an_undeterminable_gateway_stops_the_bring_up_and_names_the_setting(outputs, needle):
@@ -187,25 +188,82 @@ def test_an_undeterminable_gateway_stops_the_bring_up_and_names_the_setting(outp
     assert needle in str(e.value) and "SLT_BIND_ADDRESS" in str(e.value)
 
 
-def test_a_missing_docker_binary_surfaces_as_docker_unavailable(monkeypatch):
+@pytest.mark.parametrize("info", [
+    (1, "", "Cannot connect to the Docker daemon"),         # no daemon
+    (124, "", "timed out"),                                 # dockercmd's bound expired
+    (0, "", ""),                                            # answered nothing
+    FileNotFoundError("docker"),                            # no docker binary
+])
+def test_docker_unreachable_falls_back_to_loopback_without_raising(monkeypatch, capsys, info):
+    monkeypatch.setattr(bindaddr, "_cached_gateway", _DETECT)
+    monkeypatch.setattr(bindaddr, "_CACHE", {})
+    calls = []
+
     def run(argv, **kw):
-        raise FileNotFoundError("docker")
-    with pytest.raises(FileNotFoundError):          # dockercmd's contract: callers map it
-        bindaddr.detect_gateway(run=run)
+        calls.append(argv)
+        if isinstance(info, Exception):
+            raise info
+        return types.SimpleNamespace(returncode=info[0], stdout=info[1], stderr=info[2])
+    for _ in range(2):
+        assert bindaddr.compose_env({}, run=run) == {
+            "SLT_BIND_ADDRESS": "127.0.0.1", "SLT_BIND_GATEWAY": "127.0.0.1"}
+    # never asked beyond `docker info`, and not kept: the next bring-up asks again
+    assert calls == [["docker", "info", "--format", "{{.OperatingSystem}}"]] * 2
+    assert "SLT_BIND_ADDRESS" in capsys.readouterr().err
+
+
+def test_a_determined_gateway_is_asked_once_per_process(monkeypatch):
+    monkeypatch.setattr(bindaddr, "_cached_gateway", _DETECT)
+    monkeypatch.setattr(bindaddr, "_CACHE", {})
+    run, calls = _run({"info": (0, "Ubuntu\n", ""), "network": (0, "172.17.0.1\n", "")})
+    for _ in range(3):
+        assert bindaddr.compose_env({}, run=run)["SLT_BIND_GATEWAY"] == "172.17.0.1"
+    assert len(calls) == 2
+
+
+def test_a_missing_docker_binary_still_surfaces_as_docker_unavailable(monkeypatch):
+    """The fallback does not hide a missing binary: the bring-up's own `compose up` reports it."""
+    monkeypatch.setattr(bindaddr, "_cached_gateway", _DETECT)
+    monkeypatch.setattr(bindaddr, "_CACHE", {})
     monkeypatch.setenv("SLT_KEEP_SERVICES", "1")
     monkeypatch.delenv("SLT_BIND_ADDRESS", raising=False)
-    monkeypatch.setattr(bindaddr, "_cached_gateway", lambda: run([]))
     import livetest.services as services_mod
     from livetest.registry import load_service
+
+    def run(argv, **kw):
+        raise FileNotFoundError("docker")
+    monkeypatch.setattr(services_mod.subprocess, "run", run)
     with pytest.raises(services_mod.DockerUnavailable):
         services_mod._default_compose_up(load_service("mysql"))
+
+
+def test_detection_never_runs_when_the_bind_address_is_set(monkeypatch, tmp_path):
+    """SLT_BIND_ADDRESS set: no bring-up asks Docker where to bind (service, then cluster)."""
+    monkeypatch.setattr(bindaddr, "_cached_gateway", _DETECT)
+    monkeypatch.setattr(bindaddr, "_CACHE", {})
+    monkeypatch.setenv("SLT_BIND_ADDRESS", "0.0.0.0")
+    monkeypatch.setenv("SLT_KEEP_SERVICES", "1")
+    monkeypatch.delenv("SLT_STRIIM_TRYOUT_JARS", raising=False)
+    import livetest.services as services_mod
+    from livetest.registry import load_service
+    seen = []
+
+    def fake_run(argv, **kw):
+        seen.append(list(argv))
+        return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+    monkeypatch.setattr(services_mod.subprocess, "run", fake_run)
+    services_mod._default_compose_up(load_service("mysql"))
+    sp.cluster_up(tmp_path, {"STRIIM_VERSION": "5.4.2"}, run=lambda argv, cwd=None: seen.append(list(argv)),
+                  query_run=lambda argv, **kw: pytest.fail(f"queried Docker: {argv}"))
+    assert [a[:3] for a in seen if "up" in a] == [["docker", "compose", "-f"]] * 2
+    assert not [a for a in seen if a[1:2] in (["info"], ["network"])]
 
 
 # ------------------------------------------------------------------ the harness passes it to compose up
 def test_a_service_bring_up_runs_compose_with_the_bind_env(monkeypatch):
     monkeypatch.setenv("SLT_KEEP_SERVICES", "1")          # a single `up` call, no reset
     monkeypatch.delenv("SLT_BIND_ADDRESS", raising=False)
-    monkeypatch.setattr(bindaddr, "_cached_gateway", lambda: "172.17.0.1")
+    monkeypatch.setattr(bindaddr, "_cached_gateway", lambda run=None: "172.17.0.1")
     import livetest.services as services_mod
     from livetest.registry import load_service
     seen = []
@@ -233,6 +291,21 @@ def test_the_cluster_bring_up_runs_compose_with_the_bind_env(monkeypatch, tmp_pa
     assert "up" in seen["argv"]
     assert seen["env"] == {"SLT_BIND_ADDRESS": "10.9.8.7", "SLT_BIND_GATEWAY": "10.9.8.7"}
     assert os.environ.get("SLT_BIND_GATEWAY") is None          # restored after the call
+
+
+def test_the_cluster_asks_docker_through_its_query_runner(monkeypatch, tmp_path):
+    monkeypatch.setattr(bindaddr, "_cached_gateway", _DETECT)
+    monkeypatch.setattr(bindaddr, "_CACHE", {})
+    monkeypatch.delenv("SLT_BIND_ADDRESS", raising=False)
+    monkeypatch.delenv("SLT_STRIIM_TRYOUT_JARS", raising=False)
+    query, calls = _run({"info": (0, "Ubuntu\n", ""), "network": (0, "172.17.0.1\n", "")})
+    seen = {}
+
+    def run(argv, cwd=None):
+        seen.update({k: os.environ.get(k) for k in ("SLT_BIND_ADDRESS", "SLT_BIND_GATEWAY")})
+    sp.cluster_up(tmp_path, {"STRIIM_VERSION": "5.4.2"}, run=run, query_run=query)
+    assert seen == {"SLT_BIND_ADDRESS": "127.0.0.1", "SLT_BIND_GATEWAY": "172.17.0.1"}
+    assert [c[0][1] for c in calls] == ["info", "network"]
 
 
 def test_a_prefixed_stack_reports_each_unset_port_variable_once():
