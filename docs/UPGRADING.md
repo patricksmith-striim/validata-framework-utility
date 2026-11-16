@@ -196,6 +196,12 @@ partial download) stops the run, naming it; delete it and run again. Each `strii
 there is pinned on the first run after the upgrade, in `deps/.slt-sha256-pins.json`. If Striim
 republishes a package under the same name, delete the file and its entry in that record.
 
+### `INT_SHARED_SERVICES` removed
+
+The setting is no longer read. A session that set it now takes the integration session lock and
+tears down the services it started, like any other. Remove it from your `.env` and scripts; give
+a second stack its own `INT_STACK_PREFIX`.
+
 ## v0.3.2
 
 ### Whole-number decimals in integration goldens (breaking)

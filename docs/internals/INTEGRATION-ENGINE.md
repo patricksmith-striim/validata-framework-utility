@@ -193,10 +193,6 @@ stacks, give the second its own `INT_STACK_PREFIX` so it owns separate container
 files. `INT_ALLOW_CONCURRENT_SESSIONS=1` bypasses the check for anyone who has read this and
 means it.
 
-`INT_SHARED_SERVICES=1` is for a caller that owns the service containers itself (a runner
-that brings them up once and exports their `INT_*` endpoints): the tier then never starts,
-stops or tears down a container, and skips this session check, since concurrency is the point.
-
 ### ⚠ A tier REBUILDS the operator module — do not build it yourself while one runs
 
 **The integration and perf tiers run `mvn` in the module under test**, because a tier that drove a

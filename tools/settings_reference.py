@@ -223,8 +223,6 @@ SECTIONS = (
                                            "service or Docker was missing. A case skipped because its "
                                            "module could not be built (no `STRIIM_HOME`, `mvn` or JDK) "
                                            "still fails the run, even when other cases passed."),
-        ("INT_SHARED_SERVICES", "unset", "Reserved: a broker owns the services, and the session does not "
-                                         "tear them down."),
     )),
 )
 # Service settings no service.yaml field explains.

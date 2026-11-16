@@ -17,15 +17,6 @@ Two isolation patterns coexist, matching sql/*/templates.sql:
 Token derivation (`_slug` / `_tid_oracle`) is copied verbatim from scripts/live's
 livetest/plugin.py so that a value like ${TID_ORACLE} means the same short,
 Oracle-safe, collision-resistant hash in both tiers.
-
-INT_SHARED_SERVICES: a later phase will let an external broker bring up shared service
-containers once and export their endpoints, the way the (now-deleted)
-scripts/integration/services.sh's `it_shared()` mode worked for the old per-operator
-bash harnesses. That broker integration is NOT implemented here -- only structured
-for: `tokens()` reads every value through `os.getenv(NAME, default)` first, so any env
-vars a broker exports simply take priority for free, and `_ensure_up()` short-circuits
-(never touches docker) whenever INT_SHARED_SERVICES=1, on the assumption a broker
-already owns container lifecycle.
 """
 from __future__ import annotations
 
@@ -262,12 +253,6 @@ def _require_service_opt_in(name: str) -> None:
         pytest.skip(f"set {gate}=1 (or INT_EMULATORS=1) to opt in to the {name!r} service")
 
 
-def _shared_services() -> bool:
-    """True once a Phase-2 broker owns shared-service lifecycle (see module docstring).
-    Not implemented here; this is the structural hook a future broker integration
-    flips on."""
-    return os.environ.get("INT_SHARED_SERVICES", "").strip() == "1"
-
 
 def _postgres_tokens() -> dict:
     d = _docker_defaults("postgres")
@@ -454,8 +439,7 @@ def _acquire_session_lock(config) -> None:
     down -v`, volume included -- when the owner finishes.
 
     Skipped for `--collect-only` (it touches no service), for xdist workers (they are one
-    session with the controller), under `INT_SHARED_SERVICES` (a broker owns lifecycle, so
-    concurrency is the design), and under `INT_ALLOW_CONCURRENT_SESSIONS` for anyone who
+    session with the controller), and under `INT_ALLOW_CONCURRENT_SESSIONS` for anyone who
     has read the above and means it.
     """
     global _session_lock
@@ -472,7 +456,7 @@ def _acquire_session_lock(config) -> None:
         return
     if os.environ.get("PYTEST_XDIST_WORKER"):
         return                      # a worker shares the controller's session
-    if _shared_services() or os.environ.get("INT_ALLOW_CONCURRENT_SESSIONS"):
+    if os.environ.get("INT_ALLOW_CONCURRENT_SESSIONS"):
         return
     lock = FileLock(str(_session_lock_path()), timeout=0)
     try:
@@ -549,13 +533,11 @@ def _ensure_up(name: str, lock: FileLock) -> bool:
     tear down something this session didn't start. Returns True iff this call did the
     registering (mirrors `services.ensure_up`'s return contract, even though no
     current caller here consumes it)."""
-    # Whole-profile preflight from ONE origin BEFORE every shortcut (broker-owned lifecycle,
-    # missing-compose skip, docker): incomplete resources are a named
+    # Whole-profile preflight from ONE origin BEFORE every shortcut (missing-compose skip,
+    # docker): incomplete resources are a named
     # inttest.resources.ResourceError, never a skip. An unavailable docker still skips below.
     from . import resources as _resources
     _resources.select_profile(name)
-    if _shared_services():
-        return False  # Phase 2: a broker already owns lifecycle -- see module docstring.
     if _docker_mod is None:
         _env_skip("env", f"services/docker.py not found; cannot bring up the {name!r} service")
     compose_file = _service_file(name, "compose.yaml")
@@ -588,7 +570,7 @@ def _ensure_up(name: str, lock: FileLock) -> bool:
 
 def pytest_unconfigure(config):
     """Release the session lock. Separate from `pytest_sessionfinish` on purpose: that hook
-    returns early for workers and under INT_SHARED_SERVICES, and does not run at all when collection fails,
+    returns early for workers, and does not run at all when collection fails,
     whereas the lock must be dropped on every exit path."""
     _release_session_lock()
 
@@ -644,7 +626,7 @@ def _int_all_skipped_guard(session, exitstatus):
 def pytest_sessionfinish(session, exitstatus):
     """Tear down every service THIS host brought up -- but only from the xdist
     controller (workers each reach sessionfinish independently and must not race each
-    other's teardown), and never under INT_SHARED_SERVICES (a broker owns lifecycle).
+    other's teardown).
 
     Under SLT_INFRA_OWNERSHIP=shared nothing is torn down either (shared never tears a service down,
     and another checkout may be using it); the services left running are printed.
@@ -668,8 +650,6 @@ def pytest_sessionfinish(session, exitstatus):
             and os.environ.get("INT_EMPTY_SELECTION_OK") == "1"
             and session.config.getoption("markexpr", "")):
         session.exitstatus = pytest.ExitCode.OK
-    if _shared_services():
-        return
     if os.environ.get("PYTEST_XDIST_WORKER"):
         return  # a worker, not the controller -- see live's plugin.py for the same guard
     if _docker_mod is None or not _started_registry().exists():

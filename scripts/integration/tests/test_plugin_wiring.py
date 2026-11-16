@@ -376,7 +376,6 @@ def test_session_guard_refuses_a_second_session_and_names_the_cause(monkeypatch,
     try:
         monkeypatch.delenv("PYTEST_XDIST_WORKER", raising=False)
         monkeypatch.delenv("INT_ALLOW_CONCURRENT_SESSIONS", raising=False)
-        monkeypatch.delenv("INT_SHARED_SERVICES", raising=False)
         # A lock file this test owns, so the assertion is about the guard rather than about
         # whatever the surrounding run happens to be holding.
         foreign = tmp_path / ".int-session.lock"

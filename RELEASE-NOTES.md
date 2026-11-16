@@ -191,6 +191,10 @@ the last release; the release makes it that version's entry.
   before-image key, so a key change reaches the target. (#72)
 - **The Docker Striim image runs with `LANG`/`LC_ALL` `C.UTF-8`**, so the JVM writes non-Latin
   text correctly. (#76)
+- **`INT_SHARED_SERVICES` is removed.** It was documented as reserved and only half worked: it
+  skipped the integration session lock and the session-end teardown, but cases still started
+  their services, and a serial session's `${TID}` stayed empty, so two sessions wrote the same
+  tables. The setting is no longer read. Use `INT_STACK_PREFIX` for a second stack.
 
 - **`livetest.cli stop` refuses while another live run uses the stack.** A stop is `down -v`
   (databases, volumes, the Striim MDR). It now exits 2 while another live session is registered

@@ -19,8 +19,7 @@ from inttest import services as S
 @pytest.fixture
 def state(monkeypatch, tmp_path):
     monkeypatch.setenv("SLT_STATE_DIR", str(tmp_path))
-    for var in ("SLT_INFRA_OWNERSHIP", "SLT_KEEP_SERVICES", "INT_KEEP_SERVICES", "INT_SHARED_SERVICES",
-                "PYTEST_XDIST_WORKER"):
+    for var in ("SLT_INFRA_OWNERSHIP", "SLT_KEEP_SERVICES", "INT_KEEP_SERVICES", "PYTEST_XDIST_WORKER"):
         monkeypatch.delenv(var, raising=False)
     downs = []
     monkeypatch.setattr(P._docker_mod, "compose_down", lambda name, lock: downs.append(name))

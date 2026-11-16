@@ -268,7 +268,7 @@ def test_the_hermetic_scrub_covers_every_bare_env_name_the_fixture_path_reads():
     # where the BUILD comes from, not which stack to talk to, so they are deliberately left
     # alone. Anything new that lands here has to be classified on purpose -- which is the
     # point: the failure this guards against is a redirection variable slipping in unnoticed.
-    read -= {"INT_SHARED_SERVICES", "SLT_PARALLEL", "SLT_RUN_DISABLED",   # how to RUN
+    read -= {"SLT_PARALLEL", "SLT_RUN_DISABLED",                         # how to RUN
              "PYTEST_XDIST_WORKER", "SLT_LOCK_DIR",
              "STRIIM_HOME", "JAVA_HOME"}                                  # what to BUILD with
     uncovered = sorted(n for n in read

@@ -433,7 +433,6 @@ def test_integration_plugin_ensure_up_preflight(tmp_path, monkeypatch):
     from inttest import plugin as int_plugin
     _write(tmp_path / "services", _NO_INIT)
     _int_root(monkeypatch, tmp_path)
-    monkeypatch.delenv("INT_SHARED_SERVICES", raising=False)
     with pytest.raises(resources.ResourceError, match="missing bind-mount source sql/init.sql"):
         int_plugin._ensure_up("demo", FileLock(str(tmp_path / "compose.lock")))
 
@@ -539,11 +538,7 @@ def test_missing_compose_is_a_named_error_on_every_lifecycle_route(tmp_path, mon
         _not_skipped(lambda: int_services.ensure_up("postgres", lock))
     with pytest.raises(resources.ResourceError, match=match):             # YAML pipeline route
         _not_skipped(lambda: int_plugin._provision_requires("case", ["postgres"], lock))
-    monkeypatch.delenv("INT_SHARED_SERVICES", raising=False)
     with pytest.raises(resources.ResourceError, match=match):             # fixture route
-        _not_skipped(lambda: int_plugin._ensure_up("postgres", lock))
-    monkeypatch.setenv("INT_SHARED_SERVICES", "1")
-    with pytest.raises(resources.ResourceError, match=match):             # broker early return
         _not_skipped(lambda: int_plugin._ensure_up("postgres", lock))
 
 
@@ -620,7 +615,7 @@ def _fixture_checkout(tmp_path, drop):
 
 def _run_fixture_only(pytester, monkeypatch, root):
     _int_root(monkeypatch, root)
-    for name in ("INT_SHARED_SERVICES", "POSTGRES_PORT", "POSTGRES_DB", "ORACLE_PORT",
+    for name in ("POSTGRES_PORT", "POSTGRES_DB", "ORACLE_PORT",
                  "INT_PG_HOST_PORT", "INT_ORA_HOST_PORT"):
         monkeypatch.delenv(name, raising=False)
     pytester.makepyfile(test_fixture_only=_FIXTURE_ONLY)

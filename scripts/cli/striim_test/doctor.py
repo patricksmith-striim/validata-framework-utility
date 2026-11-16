@@ -816,7 +816,7 @@ def check_int_session(env: dict) -> list:
     from filelock import FileLock, Timeout
 
     from inttest import plugin as int_plugin
-    if (env.get("INT_SHARED_SERVICES") or "").strip() == "1" or env.get("INT_ALLOW_CONCURRENT_SESSIONS"):
+    if env.get("INT_ALLOW_CONCURRENT_SESSIONS"):
         return []
     path = int_plugin._session_lock_path()
     if not path.exists():
