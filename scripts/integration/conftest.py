@@ -65,14 +65,21 @@ def pytest_configure(config):
         return          # the controller already redirected it, and the worker inherits that
     if not _selects_no_service_item(config.option.markexpr or ""):
         return
-    names = ("SLT_STATE_DIR", "SLT_FRAMEWORK_HOME", "INT_STACK_PREFIX")
+    names = ("SLT_STATE_DIR", "SLT_FRAMEWORK_HOME", "INT_STACK_PREFIX", "SLT_LOCK_DIR")
     saved = {name: os.environ.get(name) for name in names}
     state = tempfile.mkdtemp(prefix="int-hermetic-state-")
     os.environ["SLT_STATE_DIR"] = state
     os.environ.pop("SLT_FRAMEWORK_HOME", None)
     os.environ.pop("INT_STACK_PREFIX", None)
+    # The session and compose locks are machine-wide (livetest.stack's lock dir, read at its import),
+    # so they move into the temporary directory too.
+    from livetest import stack
+    saved_lock_dir = stack._LOCK_DIR
+    os.environ["SLT_LOCK_DIR"] = os.path.join(state, "locks")
+    stack._LOCK_DIR = Path(os.environ["SLT_LOCK_DIR"])
 
     def restore():      # runs after pytest_unconfigure, so the lock is already released
+        stack._LOCK_DIR = saved_lock_dir
         shutil.rmtree(state, ignore_errors=True)
         for name, value in saved.items():
             if value is None:

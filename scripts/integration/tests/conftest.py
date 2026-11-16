@@ -8,6 +8,16 @@ os.environ["SLT_PRE_UP"] = "0"
 
 
 @pytest.fixture(autouse=True)
+def _private_lock_dir(monkeypatch, tmp_path):
+    """The session and compose locks are machine-wide (livetest.stack's lock dir). Each test gets a lock dir of
+    its own, in this process and for the pytest sessions it starts, as each already gets its own state dir:
+    otherwise a child session meets the lock this session holds and is refused as a second session."""
+    from livetest import stack
+    monkeypatch.setattr(stack, "_LOCK_DIR", tmp_path / "slt-locks")
+    monkeypatch.setenv("SLT_LOCK_DIR", str(tmp_path / "slt-locks"))
+
+
+@pytest.fixture(autouse=True)
 def _no_release_matrix(monkeypatch):
     """A developer's matrix or STRIIM_HOME must not change jar names; tests that need a release set
     pass one explicitly."""

@@ -397,8 +397,16 @@ def _started_registry() -> Path:
     return _state_root() / _int_state_name(".int-services-up.json")
 
 
+def _host_lock_path(base: str) -> Path:
+    # The containers these locks guard are per HOST (one `int-postgres` per INT_STACK_PREFIX on a
+    # machine), so the locks are too: two checkouts, or two state dirs, on one stack take the same lock. The
+    # records (the started registry) stay in the state dir.
+    from livetest import stack
+    return stack.host_lock_path(_int_state_name(base))
+
+
 def _compose_lock_path() -> Path:
-    return _state_root() / _int_state_name(".int-compose.lock")
+    return _host_lock_path(".int-compose.lock")
 
 
 def _op_build_lock_path(op_jar_ref: str) -> Path:
@@ -409,9 +417,10 @@ def _op_build_lock_path(op_jar_ref: str) -> Path:
 
 def _session_lock_path() -> Path:
     # Prefix-scoped like every other state file here: INT_STACK_PREFIX is what separates
-    # two DELIBERATE stacks in one checkout, and those are exactly the concurrent sessions
-    # that are safe -- they own different containers and different state files.
-    return _state_root() / _int_state_name(".int-session.lock")
+    # two DELIBERATE stacks, and those are exactly the concurrent sessions that are safe --
+    # they own different containers and different state files. Machine-wide: a
+    # second checkout on the same stack is a second session on the same containers.
+    return _host_lock_path(".int-session.lock")
 
 
 #: Held for the whole session by the controller; see `_acquire_session_lock`. Module-level
@@ -470,8 +479,8 @@ def _acquire_session_lock(config) -> None:
         lock.acquire()
     except Timeout:
         raise pytest.UsageError(
-            f"another integration-test session is already running against this checkout "
-            f"({_session_lock_path().name}).\n"
+            f"another integration-test session is already running against this stack's services "
+            f"({_session_lock_path()}).\n"
             f"\n"
             f"They cannot share it. In a serial run ${{TID}} is EMPTY, so both sessions "
             f"address the same fixed table names in the same schemas and will drop, "
@@ -640,6 +649,9 @@ def pytest_sessionfinish(session, exitstatus):
     Under SLT_INFRA_OWNERSHIP=shared nothing is torn down either (shared never tears a service down,
     and another checkout may be using it); the services left running are printed.
 
+    A failed teardown fails the session (exit status 1 when it was 0; case results stand) and
+    keeps the failed names in the registry, so the next session tears them down.
+
     Under INT_KEEP_SERVICES (fast local iteration without re-provisioning containers
     between runs), the containers are deliberately left running -- but the registry
     is still cleared either way: keeping a service running hands its lifecycle over
@@ -671,12 +683,30 @@ def pytest_sessionfinish(session, exitstatus):
             if started:
                 print(f"[integration] left running (SLT_INFRA_OWNERSHIP=shared): {', '.join(sorted(started))}")
         elif not os.environ.get("INT_KEEP_SERVICES"):
-            for name in started:
+            failed = set()
+            for name in sorted(started):
                 try:
                     _docker_mod.compose_down(name, lock)
-                except Exception as e:  # noqa: BLE001 - teardown must not mask the run's real outcome
-                    print(f"[integration] WARNING: failed to tear down {name!r}: {e!r} "
+                    # `down` is project-scoped: a same-named container of another compose project survives it
+                    # and `down` still exits 0 (the same check `inttest.cli stop` makes).
+                    survivors = _docker_mod.surviving_containers(name)
+                    if survivors:
+                        raise RuntimeError(f"{', '.join(survivors)} still present after `compose down`; remove "
+                                           f"it once with: docker rm -f {' '.join(survivors)}")
+                except Exception as e:  # noqa: BLE001 - one failure must not strand the rest
+                    print(f"[integration] ERROR: failed to tear down {name!r}: {e!r} "
                           f"(container may still be running)")
+                    failed.add(name)
+            if failed:
+                # As the live tier: case results stand, the session fails, and the failed names stay
+                # recorded so the next session tears them down (it would otherwise find them "already up"
+                # and never own them again).
+                _write_started(failed)
+                print(f"[integration] ERROR: teardown failed for {', '.join(sorted(failed))}; kept in "
+                      f"{_started_registry().name} so the next session retries")
+                if session.exitstatus == 0:
+                    session.exitstatus = 1
+                return
         try:
             _started_registry().unlink()
         except FileNotFoundError:

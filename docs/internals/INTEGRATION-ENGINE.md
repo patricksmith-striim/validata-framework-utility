@@ -153,9 +153,19 @@ The failures this produces name the wrong thing every time — a unique-constrai
 missing table, a missing lookup row, in whichever module happened to be executing.
 
 ```
-ERROR: another integration-test session is already running against this checkout
-       (.int-session.lock).
+ERROR: another integration-test session is already running against this stack's services
+       (/tmp/slt-locks/.int-session.lock).
 ```
+
+The session lock and the compose lock are machine-wide (`<SLT_LOCK_DIR>/.int-session.lock` and
+`.int-compose.lock`, prefixed by `INT_STACK_PREFIX`), because the containers they guard are one per
+host and prefix: a second checkout, or a second `SLT_STATE_DIR`, on the same stack is a second
+session. The started-services record (`.int-services-up.json`) stays in the state dir.
+
+**A failed teardown fails the session.** At session end the controller runs `compose down -v` for
+every service it started and checks that no same-named container survived. A failure is reported,
+the session exits 1 (case results stand; a worse exit status is kept), and the failed names stay in
+`.int-services-up.json`, so the next session tears them down.
 
 **A dead session cannot strand the next one.** The marker is an OS `fcntl` lock, not the file's
 existence — the kernel drops it when the holder dies, so even a `SIGKILL` (no `atexit`, no

@@ -8,11 +8,55 @@ from tests.test_int_path_sites import INT, _fw_int, _mod, _run
 
 
 def test_compose_lock_single_file(monkeypatch, tmp_path):
-    # Review Focus 5: the CLI and the plugin must serialise on ONE compose lock.
-    # Both resolve the state root at call time (inttest.resources.state_root).
-    monkeypatch.setenv("SLT_STATE_DIR", str(tmp_path))
+    # Review Focus 5: the CLI and the plugin must serialise on ONE compose lock, in the
+    # machine-wide lock dir, resolved at call time.
+    from livetest import stack
+    monkeypatch.setattr(stack, "_LOCK_DIR", tmp_path / "locks")
+    monkeypatch.setenv("SLT_STATE_DIR", str(tmp_path / "state"))
     monkeypatch.delenv("INT_STACK_PREFIX", raising=False)
-    assert plugin._compose_lock_path() == cli._lock_file() == tmp_path.resolve() / ".int-compose.lock"
+    assert plugin._compose_lock_path() == cli._lock_file() == tmp_path / "locks" / ".int-compose.lock"
+
+
+def test_session_and_compose_locks_are_per_stack_not_per_state_dir(monkeypatch, tmp_path):
+    """Two checkouts (two state dirs) on one INT_STACK_PREFIX drive the same containers, so they take
+    the same session and compose locks; the started registry stays each checkout's own record."""
+    from livetest import stack
+    monkeypatch.setattr(stack, "_LOCK_DIR", tmp_path / "locks")
+    monkeypatch.delenv("INT_STACK_PREFIX", raising=False)
+    seen = {}
+    for name in ("checkout-a", "checkout-b"):
+        (tmp_path / name).mkdir()
+        monkeypatch.setenv("SLT_STATE_DIR", str(tmp_path / name))
+        seen[name] = (plugin._session_lock_path(), plugin._compose_lock_path(), cli._lock_file(),
+                      plugin._started_registry())
+    a, b = seen["checkout-a"], seen["checkout-b"]
+    assert a[0] == b[0] == tmp_path / "locks" / ".int-session.lock"
+    assert a[1] == b[1] == a[2] == b[2] == tmp_path / "locks" / ".int-compose.lock"
+    assert a[3] == tmp_path / "checkout-a" / ".int-services-up.json" != b[3]
+    monkeypatch.setenv("INT_STACK_PREFIX", "alt")          # another stack: its own containers, its own locks
+    assert plugin._session_lock_path() == tmp_path / "locks" / ".alt-int-session.lock"
+    assert plugin._compose_lock_path() == cli._lock_file() == tmp_path / "locks" / ".alt-int-compose.lock"
+
+
+def test_a_second_checkout_on_the_same_stack_is_refused_as_a_second_session(monkeypatch, tmp_path):
+    import pytest
+    from filelock import FileLock
+    from types import SimpleNamespace
+    from livetest import stack
+    monkeypatch.setattr(stack, "_LOCK_DIR", tmp_path / "locks")
+    for var in ("INT_STACK_PREFIX", "PYTEST_XDIST_WORKER", "INT_SHARED_SERVICES", "INT_ALLOW_CONCURRENT_SESSIONS"):
+        monkeypatch.delenv(var, raising=False)
+    (tmp_path / "a").mkdir(), (tmp_path / "b").mkdir()
+    monkeypatch.setenv("SLT_STATE_DIR", str(tmp_path / "a"))
+    first = FileLock(str(plugin._session_lock_path()), timeout=0)
+    first.acquire()                                        # checkout a's session
+    monkeypatch.setattr(plugin, "_session_lock", None)
+    try:
+        monkeypatch.setenv("SLT_STATE_DIR", str(tmp_path / "b"))
+        with pytest.raises(pytest.UsageError, match="another integration-test session is already running"):
+            plugin._acquire_session_lock(SimpleNamespace(option=SimpleNamespace(collectonly=False)))
+    finally:
+        first.release()
 
 
 def test_no_filelock_carries_a_wait():
@@ -112,6 +156,8 @@ def test_perf_dir_stays_on_the_collected_tree_under_another_framework_home(tmp_p
 def test_the_cli_and_a_session_share_the_compose_lock_under_a_stack_prefix(tmp_path, monkeypatch):
     # `start`/`stop` must serialise with a session's `compose up` on the same stack.
     from inttest import cli, plugin
+    from livetest import stack
+    monkeypatch.setattr(stack, "_LOCK_DIR", tmp_path / "locks")
     monkeypatch.setenv("SLT_STATE_DIR", str(tmp_path))
     monkeypatch.setenv("INT_STACK_PREFIX", "alt")
     assert cli._lock_file() == plugin._compose_lock_path()

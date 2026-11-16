@@ -35,12 +35,12 @@ def _pytest(env: dict, *args) -> subprocess.CompletedProcess:
 
 
 def test_a_held_real_session_lock_does_not_refuse_the_hermetic_suite(tmp_path):
-    state = tmp_path / "state"
-    state.mkdir()
-    # A developer's second stack, as a field shell names it. timeout=0: a fresh file nothing else
-    # holds, and no FileLock here may wait (test_no_filelock_carries_a_wait).
-    with FileLock(str(state / ".alt-int-session.lock"), timeout=0):
-        r = _pytest(_env(state, INT_STACK_PREFIX="alt"), "-m", HERMETIC)
+    state, locks = tmp_path / "state", tmp_path / "locks"
+    state.mkdir(), locks.mkdir()
+    # A developer's second stack, as a field shell names it; its session lock is machine-wide. timeout=0: a
+    # fresh file nothing else holds, and no FileLock here may wait (test_no_filelock_carries_a_wait).
+    with FileLock(str(locks / ".alt-int-session.lock"), timeout=0):
+        r = _pytest(_env(state, INT_STACK_PREFIX="alt", SLT_LOCK_DIR=str(locks)), "-m", HERMETIC)
     assert r.returncode == 0, r.stdout[-800:] + r.stderr[-800:]
     assert "another integration-test session" not in r.stdout + r.stderr
 
@@ -66,9 +66,9 @@ def test_the_hermetic_suite_leaves_nothing_in_another_checkout(tmp_path):
 def test_a_session_that_can_select_integration_items_still_takes_the_real_lock(tmp_path, markexpr):
     """Only the marker expression decides: `-m postgres` selects a regression case (marked
     `integration` and `postgres`), so it is a real session and the lock stays where it was."""
-    state = tmp_path / "state"
-    state.mkdir()
-    with FileLock(str(state / ".int-session.lock"), timeout=0):
-        r = _pytest(_env(state), "-m", markexpr)
+    state, locks = tmp_path / "state", tmp_path / "locks"
+    state.mkdir(), locks.mkdir()
+    with FileLock(str(locks / ".int-session.lock"), timeout=0):
+        r = _pytest(_env(state, SLT_LOCK_DIR=str(locks)), "-m", markexpr)
     assert r.returncode == 4, r.stdout[-800:] + r.stderr[-800:]
     assert "another integration-test session is already running" in r.stdout + r.stderr

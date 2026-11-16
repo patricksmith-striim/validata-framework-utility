@@ -25,6 +25,7 @@ def state(monkeypatch, tmp_path):
     downs = []
     monkeypatch.setattr(P._docker_mod, "compose_down", lambda name, lock: downs.append(name))
     monkeypatch.setattr(S, "compose_down", lambda name, lock: downs.append(name))
+    monkeypatch.setattr(S, "surviving_containers", lambda name: [])     # no docker in a hermetic test
     return downs
 
 

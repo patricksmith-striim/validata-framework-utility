@@ -50,13 +50,11 @@ SITES = [
     # before the framework move a moved case root is refused, so it cannot "follow" the key.
     (_mod("inttest.plugin", "_PERF_RESULTS_DIR"), "SLT_STATE_DIR", INT / ".perf-results",
      lambda t: t / ".perf-results", None),
-    ("importlib.import_module('inttest.plugin')._compose_lock_path()", "SLT_STATE_DIR",
-     INT / ".int-compose.lock", lambda t: t / ".int-compose.lock", None),
+    # plugin._compose_lock_path and cli._lock_file are machine-wide (SLT_LOCK_DIR), not state-dir
+    # sites: pinned in test_int_state_paths.py.
     # cli lists services through inttest.resources.list_profiles (the row below covers that seam)
     ("importlib.import_module('inttest.resources').services_roots()[0]", "SLT_INT_SERVICES_DIR",
      INT / "services", lambda t: t, None),
-    ("importlib.import_module('inttest.cli')._lock_file()", "SLT_STATE_DIR",
-     INT / ".int-compose.lock", lambda t: t / ".int-compose.lock", None),
     ("importlib.import_module('inttest.tokens')._services_root('x', None)",
      "SLT_INT_SERVICES_DIR", INT / "services", lambda t: t, None),
     ("importlib.import_module('inttest.services')._state_root()", "SLT_STATE_DIR", INT,

@@ -811,7 +811,7 @@ def check_int_services(need: dict, env: dict, docker=None) -> list:
 
 
 def check_int_session(env: dict) -> list:
-    """Another integration session against this checkout refuses the run
+    """Another integration session against this stack (its machine-wide session lock) refuses the run
     (inttest.plugin._acquire_session_lock); the lock is tried and released at once."""
     from filelock import FileLock, Timeout
 

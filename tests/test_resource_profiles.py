@@ -488,8 +488,11 @@ def test_integration_tokens_follow_call_time_root(tmp_path, monkeypatch):
 
 
 def test_integration_cli_and_state_follow_call_time_root(tmp_path, monkeypatch):
+    # The session and compose locks are machine-wide (the lock dir), never under a state root.
+    from livetest import stack
+    monkeypatch.setattr(stack, "_LOCK_DIR", tmp_path / "locks")
     # nothing set: today's layout
-    assert cli._lock_file() == REPO / "scripts/integration/.int-compose.lock"
+    assert cli._lock_file() == tmp_path / "locks" / ".int-compose.lock"
     assert int_services.started_registry_path().parent == REPO / "scripts/integration"
     _write(tmp_path / "services", {
         "mysql/service.yaml": "name: mysql\nisolation: none\n",
@@ -501,12 +504,12 @@ def test_integration_cli_and_state_follow_call_time_root(tmp_path, monkeypatch):
     state.mkdir()
     monkeypatch.setenv("SLT_STATE_DIR", str(state))
     from inttest import plugin as int_plugin
-    assert cli._lock_file() == state.resolve() / ".int-compose.lock"
+    assert cli._lock_file() == tmp_path / "locks" / ".int-compose.lock"
     assert int_services._provision_registry_path().parent == state.resolve()
     assert int_services.started_registry_path().parent == state.resolve()
     assert int_plugin._started_registry() == int_services.started_registry_path()
-    assert int_plugin._compose_lock_path().parent == state.resolve()
-    assert int_plugin._session_lock_path().parent == state.resolve()
+    assert int_plugin._compose_lock_path() == cli._lock_file()
+    assert int_plugin._session_lock_path() == tmp_path / "locks" / ".int-session.lock"
 
 
 # ---------------------------------------------------------------------------
