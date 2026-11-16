@@ -17,6 +17,7 @@ class DiffSpecError(Exception):
 #: plus `keys`, which the typed `exact:` declaration (canon) reads.
 DIFF_SPEC_KEYS = frozenset({
     "source", "target", "db", "source_db", "target_db", "exact", "fold_names", "keys",
+    "stable_seconds",
 })
 
 

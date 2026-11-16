@@ -154,7 +154,7 @@ def sorted_rows_for_display(rows) -> list:
 #: `nothing:` and `audit:` checks read. `nothing` specs are validated by livetest.nothing.
 DATA_SPEC_KEYS = frozenset({
     "target", "db", "target_db", "source_db", "min_rows", "rows", "match",
-    "project", "keys", "ordered", "payload", "exact", "nothing", "audit",
+    "project", "keys", "ordered", "payload", "exact", "nothing", "audit", "stable_seconds",
 })
 
 
