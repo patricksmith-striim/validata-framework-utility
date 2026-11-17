@@ -220,7 +220,7 @@ def test_livetest_cli_refuses_a_bad_switch_before_any_command(monkeypatch, capsy
     from livetest import cli, project
     ran = []
     monkeypatch.setattr(project, "load_and_activate", lambda *a, **k: None)
-    monkeypatch.setattr(cli, "cmd_down", lambda targets: ran.append(targets) or 0)
+    monkeypatch.setattr(cli, "cmd_down", lambda targets, **k: ran.append(targets) or 0)
     monkeypatch.setattr(sys, "argv", ["livetest.cli", "stop", "all"])
     monkeypatch.setenv("SLT_KEEP_SERVICES", "yes")
     assert cli.main() == 2

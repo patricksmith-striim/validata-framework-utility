@@ -15,6 +15,7 @@ import yaml
 
 import livetest
 from livetest import bindaddr
+from livetest import paths
 from livetest import striim_provision as sp
 
 _DETECT = bindaddr._cached_gateway       # the real one; the suite's conftest stubs it per test
@@ -55,13 +56,22 @@ def test_the_base_compose_publishes_no_debugger_port():
         assert "STRIIM_DEBUG" not in (svc.get("environment") or {}), name
 
 
-@pytest.mark.parametrize("value", [None, "", "0", "true", "yes", " 1"])
+@pytest.mark.parametrize("value", [None, "", "0"])
 def test_the_debug_overlay_is_left_out_unless_the_switch_is_1(monkeypatch, value):
     if value is None:
         monkeypatch.delenv("SLT_STRIIM_DEBUG", raising=False)
     else:
         monkeypatch.setenv("SLT_STRIIM_DEBUG", value)
     assert DEBUG_OVERLAY not in sp._compose_files()
+
+
+@pytest.mark.parametrize("value", ["true", "yes", " 1"])
+def test_a_debug_switch_that_is_not_1_or_0_stops_the_run(monkeypatch, value):
+    # SLT_STRIIM_DEBUG is a switch: anything but 1 or 0 is refused, not read as off.
+    monkeypatch.setenv("SLT_STRIIM_DEBUG", value)
+    assert "SLT_STRIIM_DEBUG" in paths.SWITCHES
+    with pytest.raises(paths.FlagError, match="SLT_STRIIM_DEBUG"):
+        sp._compose_files()
 
 
 def test_slt_striim_debug_1_adds_the_overlay_publishing_jdwp_on_loopback(monkeypatch):

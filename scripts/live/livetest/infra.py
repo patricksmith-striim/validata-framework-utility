@@ -805,13 +805,13 @@ def shared_provision_lock(container: str) -> str:
 
 
 def _shared_provision_allowed(env) -> bool:
-    """``SLT_SHARED_PROVISION``: unset or 1 starts a missing shared service (the default); 0 refuses."""
-    value = (env.get(SHARED_PROVISION_ENV) or "").strip()
-    if value in ("", "1"):
-        return True
-    if value == "0":
-        return False
-    raise InfraOwnershipError(f"{SHARED_PROVISION_ENV}={value!r} is not an accepted value: use 1 or 0")
+    """``SLT_SHARED_PROVISION``: unset or 1 starts a missing shared service (the default); 0 refuses.
+    A switch like the others (livetest.paths.flag): any other value is refused."""
+    from livetest import paths
+    try:
+        return paths.flag(SHARED_PROVISION_ENV, env)
+    except paths.FlagError as e:
+        raise InfraOwnershipError(str(e)) from None
 
 
 def resolve_service(infra, name, env, started, resolve_fn, progress=None, *, load=None,
@@ -873,7 +873,8 @@ def resolve_service(infra, name, env, started, resolve_fn, progress=None, *, loa
             try:
                 # Only where `resolve` consults the provision registry (its parallel branch): a serial
                 # run never reads it, and needs no state dir for it.
-                if env.get("PYTEST_XDIST_WORKER") or env.get("SLT_PARALLEL"):
+                from livetest import paths
+                if env.get("PYTEST_XDIST_WORKER") or paths.flag("SLT_PARALLEL", env):
                     forget([container, f"{name}-setup"], timeout=dockercmd.LOCK_WAIT_S)
             except Timeout:
                 raise InfraOwnershipError(

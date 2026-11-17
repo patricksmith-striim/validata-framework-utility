@@ -355,10 +355,12 @@ def test_a_serial_shared_run_does_not_touch_the_provision_registry():
     assert ran == [1]
 
 
-def test_shared_provision_takes_only_1_or_0():
-    with pytest.raises(infra.InfraOwnershipError, match="SLT_SHARED_PROVISION='yes' is not an accepted value"):
+@pytest.mark.parametrize("value", ["yes", " 1", "true"])
+def test_shared_provision_takes_only_1_or_0(value):
+    # A switch like the others: the strict helper refuses anything but 1 or 0 (unset is on).
+    with pytest.raises(infra.InfraOwnershipError, match=rf"SLT_SHARED_PROVISION={value!r}: a switch is 1"):
         infra.resolve_service(infra.Infra("shared", PORT, infra._lock_dir()), "postgres",
-                              {"SLT_SHARED_PROVISION": "yes"}, set(), lambda *a, **k: pytest.fail("resolved"),
+                              {"SLT_SHARED_PROVISION": value}, set(), lambda *a, **k: pytest.fail("resolved"),
                               load=lambda n: _defn(), container_running=lambda c: False)
 
 

@@ -923,7 +923,7 @@ DEBUG_COMPOSE_FILE = "compose.debug.yaml"
 
 def _debug_enabled() -> bool:
     from livetest import paths
-    return paths.effective_env(os.environ).get(DEBUG_ENV) == "1"
+    return paths.flag(DEBUG_ENV, paths.effective_env(os.environ))
 
 
 _COMPOSE_FILES = ["-f", "compose.yaml", "-f", "compose.spanner-emulator.yaml",
