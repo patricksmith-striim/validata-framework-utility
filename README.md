@@ -1,4 +1,15 @@
-# striim-testing-framework-utility
+# validata-framework-utility
+
+> **A fork of [striim-testing-framework-utility](https://github.com/striim/striim-testing-framework-utility) for Validata.**
+> What is Validata-specific lives under [`scripts/live/services/validata`](scripts/live/services/validata/README.md): the
+> Validata image recipe (`.deb` packages, `ubuntu:22.04`, JDK 17, one node and no agents) and its compose file, laid out
+> like the Striim service beside it. The rest is the upstream framework, kept so changes can be pulled in
+> (`git remote add upstream https://github.com/striim/striim-testing-framework-utility.git`).
+> Striim Labs (striim-field, `infrastructure/striim-labs`) uses the `validata` service to run Validata on a laptop.
+
+---
+
+# striim-testing-framework-utility (upstream README)
 
 Test your Striim apps against a real Striim. You write a test as a folder: the app's TQL, the DDL
 and seed data, the rows you expect, and a `test.yaml` that ties them together. `striim-test` creates

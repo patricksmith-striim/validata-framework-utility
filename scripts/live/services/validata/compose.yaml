@@ -1,0 +1,42 @@
+# Validata: one server, no cluster and no agents. Parallel stacks: SLT_STACK_PREFIX namespaces the compose project (which
+# owns the network and volume names) and the container_name below, as in ../striim/compose.yaml; unset, they interpolate
+# to the plain names.
+name: ${SLT_STACK_PREFIX:+${SLT_STACK_PREFIX}-}slt-validata
+services:
+   slt-validata:
+      build:
+         context: ./images/validata
+         args:
+            VALIDATA_VERSION: ${VALIDATA_VERSION:-1.1.0}
+      image: ${SLT_STACK_PREFIX:+${SLT_STACK_PREFIX}-}slt-validata:${VALIDATA_VERSION:-1.1.0}
+      platform: linux/amd64
+      container_name: ${SLT_STACK_PREFIX:+${SLT_STACK_PREFIX}-}slt-validata
+      hostname: slt-validata
+      # MEM_MAX below is only the JVM heap; mem_limit is the container's ceiling, so a stack that outgrows the host
+      # kills the container and not the host. Default 0 = unlimited. Keep the limit above the heap (about heap x 1.5
+      # + 2 GB for direct memory, metaspace and stacks). Set both together on a modest machine:
+      #    export SLT_VALIDATA_MEM_MAX=2048m SLT_VALIDATA_MEM_LIMIT=5g
+      mem_limit: ${SLT_VALIDATA_MEM_LIMIT:-0}
+      cpus: ${SLT_VALIDATA_CPUS:-0}
+      environment:
+         # The license: never baked into the image. The server refuses to start when the cluster or company name is
+         # blank; with no keys it runs as a trial.
+         VALIDATA_CLUSTER_NAME: ${VALIDATA_CLUSTER_NAME}
+         VALIDATA_COMPANY_NAME: ${VALIDATA_COMPANY_NAME}
+         VALIDATA_PRODUCT_KEY: ${VALIDATA_PRODUCT_KEY:-}
+         VALIDATA_LICENCE_KEY: ${VALIDATA_LICENCE_KEY:-}
+         # sksConfig.sh's passwords, set once per conf volume. The admin user is always named "admin".
+         VALIDATA_ADMIN_PASSWORD: ${VALIDATA_ADMIN_PASSWORD:-validata}
+         VALIDATA_SYS_PASSWORD: ${VALIDATA_SYS_PASSWORD:-validata}
+         VALIDATA_KEYSTORE_PASSWORD: ${VALIDATA_KEYSTORE_PASSWORD:-validata}
+         VALIDATA_MEM_MIN: ${SLT_VALIDATA_MEM_MIN:-1024m}
+         VALIDATA_MEM_MAX: ${SLT_VALIDATA_MEM_MAX:-4096m}
+      ports:
+         # Host ports default to 9180/9181, not Striim's 9080/9081, so both stacks can run on one machine.
+         - "${SLT_VALIDATA_HTTP_HOST_PORT:-9180}:9080"    # web UI and API
+         - "${SLT_VALIDATA_HTTPS_HOST_PORT:-9181}:9081"   # HTTPS
+      volumes:
+         - validata-conf:/opt/validata/conf
+      restart: unless-stopped
+volumes:
+   validata-conf:

@@ -1,0 +1,3 @@
+# Downloaded build deps (the Validata .deb packages): never commit
+*
+!.gitignore
