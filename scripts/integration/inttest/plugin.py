@@ -2731,13 +2731,13 @@ class IntYamlItem(pytest.Item):
 
     def _teardown_bigtable(self) -> None:
         """Drop the tables `_setup_bigtable` created. An already-missing table is fine; any other
-        failure is reported and does not mask the case's own outcome."""
+        failure is a teardown leak (`_teardown_leak`: shown, summarised and counted in the case
+        record) and does not mask the case's own outcome."""
         for route, table, tok in getattr(self, "_bigtable_created", []):
             try:
                 dbroutes_mod.teardown_bigtable(table, route=route, tokens=tok)
             except Exception as e:  # noqa: BLE001 - teardown must not mask the real outcome
-                print(f"[integration] WARNING: failed to drop bigtable table {table!r} on "
-                      f"{route!r}: {e!r}")
+                _teardown_leak(self, f"drop bigtable table {table!r} on {route!r}", e)
         self._bigtable_created = []
 
     def _teardown_db_isolation(self, failed: bool) -> None:
