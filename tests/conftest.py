@@ -51,10 +51,22 @@ def pytest_runtest_setup(item):
             pytest.skip(f"needs a git checkout: {reason}")
 
 
+@pytest.fixture(scope="session")
+def _hermetic_lock_dir(tmp_path_factory):
+    """The machine-wide lock dir (livetest.stack's) for this run alone. The integration session and
+    compose locks live there, so a root test that drives a run, in process or through striim-test,
+    would otherwise take a real stack's lock, and two runs of this suite on one machine would
+    refuse each other."""
+    return tmp_path_factory.mktemp("slt-locks")
+
+
 @pytest.fixture(autouse=True)
-def _hermetic_env(monkeypatch):
+def _hermetic_env(monkeypatch, _hermetic_lock_dir):
     for name in [n for n in os.environ if n.startswith(("SLT_", "INT_"))] + ["STRIIM_URL"]:
         monkeypatch.delenv(name, raising=False)
+    from livetest import stack as _stack
+    monkeypatch.setenv("SLT_LOCK_DIR", str(_hermetic_lock_dir))
+    monkeypatch.setattr(_stack, "_LOCK_DIR", _hermetic_lock_dir)
     # No project manifest carried over from an earlier test (doctor and the CLI activate one in
     # process): example:/jar: roots resolve through the active project at call time.
     from livetest import layout as _layout, project as _project
