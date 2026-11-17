@@ -554,7 +554,7 @@ def int_session(monkeypatch, tmp_path):
     state = tmp_path / "state"
     state.mkdir()
     monkeypatch.setenv("SLT_STATE_DIR", str(state))
-    for var in ("INT_SHARED_SERVICES", "PYTEST_XDIST_WORKER", "INT_KEEP_SERVICES", "INT_STACK_PREFIX",
+    for var in ("PYTEST_XDIST_WORKER", "INT_KEEP_SERVICES", "INT_STACK_PREFIX",
                 "INT_EMPTY_SELECTION_OK", "INT_ALLOW_ALL_SKIPPED", "SLT_INFRA_OWNERSHIP"):
         monkeypatch.delenv(var, raising=False)
     calls, survivors = [], {}
@@ -628,8 +628,7 @@ def test_int_keep_services_keeps_containers_and_clears_the_registry(int_session,
     assert int_session.session.exitstatus == 0
 
 
-@pytest.mark.parametrize("var, value", [("PYTEST_XDIST_WORKER", "gw0"), ("INT_SHARED_SERVICES", "1")])
-def test_worker_and_broker_runs_never_tear_down(int_session, monkeypatch, var, value):
-    monkeypatch.setenv(var, value)
+def test_a_worker_run_never_tears_down(int_session, monkeypatch):
+    monkeypatch.setenv("PYTEST_XDIST_WORKER", "gw0")
     plugin.pytest_sessionfinish(int_session.session, 0)
     assert int_session.calls == [] and int_session.registry.exists()

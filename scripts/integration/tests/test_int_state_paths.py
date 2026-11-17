@@ -44,7 +44,7 @@ def test_a_second_checkout_on_the_same_stack_is_refused_as_a_second_session(monk
     from types import SimpleNamespace
     from livetest import stack
     monkeypatch.setattr(stack, "_LOCK_DIR", tmp_path / "locks")
-    for var in ("INT_STACK_PREFIX", "PYTEST_XDIST_WORKER", "INT_SHARED_SERVICES", "INT_ALLOW_CONCURRENT_SESSIONS"):
+    for var in ("INT_STACK_PREFIX", "PYTEST_XDIST_WORKER", "INT_ALLOW_CONCURRENT_SESSIONS"):
         monkeypatch.delenv(var, raising=False)
     (tmp_path / "a").mkdir(), (tmp_path / "b").mkdir()
     monkeypatch.setenv("SLT_STATE_DIR", str(tmp_path / "a"))
