@@ -34,6 +34,8 @@ set_prop MetaDataRepositoryLocation "localhost:1527"  # the Derby started below
 
 log "Starting Derby (validata-dbms)..."
 mkdir -p /var/validata/logs
+# The package's install script fills in REPLACE_ME (its home) with systemd and init steps that don't run in a Docker build.
+grep -q REPLACE_ME "$DBMS" && sed -i "s#REPLACE_ME#/var/validata#g" "$DBMS"
 nohup "$DBMS" start > /var/validata/logs/validata-dbms-start.log 2>&1 &
 for _ in $(seq 1 60); do nc -z localhost 1527 && break; sleep 2; done
 nc -z localhost 1527 || { cat /var/validata/logs/validata-dbms-start.log >&2; die "Derby didn't open 1527"; }
