@@ -127,6 +127,33 @@ def test_interrupt_command(signal, argv):
     assert len(run.calls) == 3
 
 
+def test_pause_freezes_the_container_and_confirms_it_paused():
+    # PAUSE keeps the container running (only frozen), so the stop check is replaced by a paused check.
+    run = FakeRun(inspect=("true",))
+    run._inspect = ["true"]
+    outage.interrupt("c1", "PAUSE", run=run, poll=0)
+    assert run.calls[0] == ["docker", "pause", "c1"]
+    assert run.calls[1] == ["docker", "container", "inspect", "-f", "{{.State.Paused}}", "c1"]
+    assert len(run.calls) == 2
+
+
+def test_pause_raises_when_the_container_is_not_paused():
+    with pytest.raises(OutageError, match="not paused"):
+        outage.interrupt("c1", "PAUSE", run=FakeRun(inspect=("false",)), poll=0)
+
+
+def test_restore_after_pause_unpauses_instead_of_starting():
+    run = FakeRun(inspect=("healthy|true",))
+    outage.restore("c1", run=run, paused=True, poll=0)
+    assert run.calls[0] == ["docker", "unpause", "c1"]
+
+
+def test_restore_after_kill_still_starts():
+    run = FakeRun(inspect=("healthy|true",))
+    outage.restore("c1", run=run, poll=0)
+    assert run.calls[0] == ["docker", "start", "c1"]
+
+
 def test_interrupt_raises_when_still_running():
     with pytest.raises(OutageError, match="still running"):
         outage.interrupt("c1", "KILL", run=FakeRun(inspect=("true",)), verify_timeout=0, poll=0)
